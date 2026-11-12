@@ -24,7 +24,7 @@ cd local-notes
 npm install --include=dev
 ```
 
-If you already ran `npm install` and saw `tauri: command not found`, run `npm install --include=dev` again from this folder. That installs the Tauri command the start script needs.
+If Terminal says `tauri: command not found`, you are in this folder and the line above has not finished successfully. Run `npm install --include=dev` again. Do not run `tauri` by itself.
 
 3. Start it:
 
