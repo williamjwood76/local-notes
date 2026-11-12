@@ -21,8 +21,12 @@ Install Node.js from https://nodejs.org if `node` is not already available. Clos
 gh auth login
 gh repo clone williamjwood76/local-notes
 cd local-notes
+git pull
+rm -rf node_modules
 npm install --include=dev
 ```
+
+The company registry refuses packages published in the last few weeks. This repository pins older copies, so install from the latest `main`. If the folder is named `local-notes-main`, that is a zip download. Delete it and use the clone above instead.
 
 If Terminal says `tauri: command not found`, you are in this folder and the line above has not finished successfully. Run `npm install --include=dev` again. Do not run `tauri` by itself.
 
