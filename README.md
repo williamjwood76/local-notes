@@ -21,8 +21,10 @@ Install Node.js from https://nodejs.org if `node` is not already available. Clos
 gh auth login
 gh repo clone williamjwood76/local-notes
 cd local-notes
-npm install
+npm install --include=dev
 ```
+
+If you already ran `npm install` and saw `tauri: command not found`, run `npm install --include=dev` again from this folder. That installs the Tauri command the start script needs.
 
 3. Start it:
 
