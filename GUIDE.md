@@ -25,7 +25,7 @@ The cursor line stays as markdown. The other lines show headings, emphasis, link
 
 The bar above the note inserts markdown. It does not change the file into a different format. Select text first for bold, italic, underline, or a link.
 
-- Click a note link to open it. Click a web link to open it in the browser. Clicking anywhere that is not a link still puts that line into edit mode. Hold Option while clicking a link if you want the cursor there instead.
+- Click a note link to open it in the app. Click a web link to open it in your default browser. Option-click a link to put the cursor there without opening it. Clicking anywhere that is not a link still edits that line.
 - Type `[[` and pick a note with the arrow keys and Enter. Aliases are included.
 - A link to a note that does not exist creates that note when you click it.
 - `[[Note#Heading]]` opens that heading. `[[Note#^block]]` opens a block marked with `^block`.

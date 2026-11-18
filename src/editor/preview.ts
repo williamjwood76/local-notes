@@ -46,6 +46,37 @@ function requestImage(path: string, refresh: () => void) {
     });
 }
 
+/** Plain click follows a link. Option-click only moves the caret. */
+export function followOnClick(button: number, altKey: boolean): boolean {
+  return button === 0 && !altKey;
+}
+
+function placeCaret(view: EditorView, event: MouseEvent, fallback: number) {
+  event.preventDefault();
+  event.stopPropagation();
+  const coords = view.posAtCoords({ x: event.clientX, y: event.clientY });
+  view.dispatch({ selection: { anchor: coords ?? fallback } });
+  view.focus();
+}
+
+function bindLink(element: HTMLElement, view: EditorView, pos: number, follow: () => void) {
+  element.addEventListener("mousedown", (event) => {
+    if (event.button !== 0) return;
+    if (!followOnClick(event.button, event.altKey)) {
+      placeCaret(view, event, pos);
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    follow();
+  });
+  // A real href would load inside this window. Swallow the click either way.
+  element.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  });
+}
+
 class StyledWidget extends WidgetType {
   constructor(
     readonly text: string,
@@ -64,18 +95,19 @@ class StyledWidget extends WidgetType {
     element.className = this.className;
     element.textContent = this.text;
     element.addEventListener("mousedown", (event) => {
-      if (event.button !== 0 || event.altKey) return;
+      if (event.button !== 0) return;
       const coords = view.posAtCoords({ x: event.clientX, y: event.clientY });
-      const action = linkActionAt(view.state, coords ?? this.pos);
-      if (action) {
-        event.preventDefault();
-        event.stopPropagation();
-        followLink(action);
-        return;
+      const pos = coords ?? this.pos;
+      if (followOnClick(event.button, event.altKey)) {
+        const action = linkActionAt(view.state, pos);
+        if (action) {
+          event.preventDefault();
+          event.stopPropagation();
+          followLink(action);
+          return;
+        }
       }
-      event.preventDefault();
-      view.dispatch({ selection: { anchor: coords ?? this.pos } });
-      view.focus();
+      placeCaret(view, event, pos);
     });
     return element;
   }
@@ -89,25 +121,20 @@ class UrlWidget extends WidgetType {
   constructor(
     readonly label: string,
     readonly url: string,
+    readonly pos: number,
   ) {
     super();
   }
 
   eq(other: UrlWidget): boolean {
-    return other.label === this.label && other.url === this.url;
+    return other.label === this.label && other.url === this.url && other.pos === this.pos;
   }
 
-  toDOM(): HTMLElement {
-    const link = document.createElement("a");
+  toDOM(view: EditorView): HTMLElement {
+    const link = document.createElement("span");
     link.className = "md-link";
-    link.href = this.url;
     link.textContent = this.label;
-    link.addEventListener("mousedown", (event) => {
-      if (event.button !== 0 || event.altKey) return;
-      event.preventDefault();
-      event.stopPropagation();
-      bridge.openUrl(this.url);
-    });
+    bindLink(link, view, this.pos, () => bridge.openUrl(this.url));
     return link;
   }
 
@@ -120,25 +147,20 @@ class LinkWidget extends WidgetType {
   constructor(
     readonly label: string,
     readonly spec: OpenSpec,
+    readonly pos: number,
   ) {
     super();
   }
 
   eq(other: LinkWidget): boolean {
-    return other.label === this.label && other.spec.target === this.spec.target && other.spec.heading === this.spec.heading && other.spec.blockId === this.spec.blockId;
+    return other.label === this.label && other.pos === this.pos && other.spec.target === this.spec.target && other.spec.heading === this.spec.heading && other.spec.blockId === this.spec.blockId;
   }
 
-  toDOM(): HTMLElement {
-    const link = document.createElement("a");
+  toDOM(view: EditorView): HTMLElement {
+    const link = document.createElement("span");
     link.className = "wikilink";
-    link.href = "#";
     link.textContent = this.label;
-    link.addEventListener("mousedown", (event) => {
-      if (event.button !== 0 || event.altKey) return;
-      event.preventDefault();
-      event.stopPropagation();
-      bridge.openLink(this.spec);
-    });
+    bindLink(link, view, this.pos, () => bridge.openLink(this.spec));
     return link;
   }
 
@@ -184,6 +206,7 @@ class NoteEmbedWidget extends WidgetType {
     readonly text: string,
     readonly spec: OpenSpec,
     readonly missing: boolean,
+    readonly pos: number,
   ) {
     super();
   }
@@ -192,7 +215,7 @@ class NoteEmbedWidget extends WidgetType {
     return other.title === this.title && other.text === this.text && other.missing === this.missing;
   }
 
-  toDOM(): HTMLElement {
+  toDOM(view: EditorView): HTMLElement {
     const box = document.createElement("div");
     box.className = this.missing ? "note-embed missing" : "note-embed";
     const heading = document.createElement("div");
@@ -202,12 +225,7 @@ class NoteEmbedWidget extends WidgetType {
     body.className = "note-embed-body";
     body.textContent = this.text;
     box.append(heading, body);
-    box.addEventListener("mousedown", (event) => {
-      if (event.button !== 0 || event.altKey) return;
-      event.preventDefault();
-      event.stopPropagation();
-      bridge.openLink(this.spec);
-    });
+    bindLink(box, view, this.pos, () => bridge.openLink(this.spec));
     return box;
   }
 
@@ -569,11 +587,11 @@ export function buildDecorations(state: EditorState, refresh: () => void): Decor
       }
       if (node.name === "WikiLink") {
         const inner = raw.replace(/^\[\[/, "").replace(/\]\]$/, "");
-        add(node.from, node.to, Decoration.replace({ widget: new LinkWidget(linkLabel(inner), specFrom(inner)) }));
+        add(node.from, node.to, Decoration.replace({ widget: new LinkWidget(linkLabel(inner), specFrom(inner), node.from) }));
         return false;
       }
       if (node.name === "Embed" || node.name === "Image") {
-        add(node.from, node.to, embedDecoration(raw, refresh));
+        add(node.from, node.to, embedDecoration(raw, refresh, node.from));
         return false;
       }
       if (node.name === "HashTag") {
@@ -600,9 +618,9 @@ export function buildDecorations(state: EditorState, refresh: () => void): Decor
         if (!match) return undefined;
         const url = match[2];
         if (/^[a-z][a-z0-9+.-]*:/i.test(url)) {
-          add(node.from, node.to, Decoration.replace({ widget: new UrlWidget(match[1] || url, url) }));
+          add(node.from, node.to, Decoration.replace({ widget: new UrlWidget(match[1] || url, url, node.from) }));
         } else {
-          add(node.from, node.to, Decoration.replace({ widget: new LinkWidget(match[1] || url, specFrom(decodeURIComponentSafe(url))) }));
+          add(node.from, node.to, Decoration.replace({ widget: new LinkWidget(match[1] || url, specFrom(decodeURIComponentSafe(url)), node.from) }));
         }
         return false;
       }
@@ -644,7 +662,7 @@ export function buildDecorations(state: EditorState, refresh: () => void): Decor
   return builder.finish();
 }
 
-function embedDecoration(raw: string, refresh: () => void): Decoration {
+function embedDecoration(raw: string, refresh: () => void, pos: number): Decoration {
   if (raw.startsWith("![")) {
     const match = /^!\[([^\]]*)\]\(([^)\s]+)\)/.exec(raw);
     const alt = match?.[1] || "image";
@@ -658,15 +676,15 @@ function embedDecoration(raw: string, refresh: () => void): Decoration {
   const resolved = bridge.resolve(spec.target);
   if (resolved.status !== "ok") {
     return Decoration.replace({
-      widget: new NoteEmbedWidget(spec.target, "Note not found", spec, true),
+      widget: new NoteEmbedWidget(spec.target, "Note not found", spec, true, pos),
     });
   }
   const note = bridge.notes.get(resolved.path);
-  if (!note) return Decoration.replace({ widget: new NoteEmbedWidget(spec.target, "Note not found", spec, true) });
+  if (!note) return Decoration.replace({ widget: new NoteEmbedWidget(spec.target, "Note not found", spec, true, pos) });
   const range = sectionRange(note, spec.heading, spec.blockId);
   let text = note.content.slice(range.start, range.end).trim();
   if (text.length > 1200) text = `${text.slice(0, 1200)}…`;
-  return Decoration.replace({ widget: new NoteEmbedWidget(note.title, text, { ...spec, target: spec.target }, false) });
+  return Decoration.replace({ widget: new NoteEmbedWidget(note.title, text, { ...spec, target: spec.target }, false, pos) });
 }
 
 function imageFor(target: string, alt: string, refresh: () => void): Decoration {
@@ -724,13 +742,20 @@ export const livePreview = [
 export const linkClickHandler = Prec.highest(
   EditorView.domEventHandlers({
     mousedown(event, view) {
-      if (event.button !== 0 || event.altKey) return false;
+      if (!followOnClick(event.button, event.altKey)) return false;
       const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
       if (pos == null) return false;
       const action = linkActionAt(view.state, pos);
       if (!action) return false;
       event.preventDefault();
       followLink(action);
+      return true;
+    },
+    click(event) {
+      const target = event.target;
+      const element = target instanceof Element ? target : target instanceof Node ? target.parentElement : null;
+      if (!element?.closest("a, .wikilink, .md-link")) return false;
+      event.preventDefault();
       return true;
     },
   }),
