@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { NoteEditor } from "../editor/NoteEditor";
 import { fuzzyRank } from "../fuzzy";
 import { fileTitle } from "../parser";
-import { backlinksFor, makeResolver, outgoingFor } from "../resolve";
+import { aliasesOf, backlinksFor, makeResolver, outgoingFor } from "../resolve";
+import { replaceLiteral } from "../vaultedit";
 import { searchNotes } from "../search";
 import {
   activateTab,
@@ -29,6 +30,7 @@ import {
   openPdf,
   resizeSplit,
   setLeftWidth,
+  replaceInVault,
   saveActive,
   scrollTo,
   selectPath,
@@ -38,9 +40,11 @@ import {
   setSearchQuery,
   showPalette,
   showPrompt,
+  showReplace,
   splitActive,
   submitPrompt,
   toggleExpanded,
+  toggleStar,
   toggleLeft,
   toggleOrphans,
   togglePreview,
@@ -115,6 +119,7 @@ export function App() {
       <StatusBar />
       <Palette />
       <PromptDialog />
+      <ReplaceDialog />
       <ConfirmDialog />
       <AmbiguousDialog />
     </div>
@@ -205,7 +210,11 @@ function FilePane() {
   const entries = useApp((state) => state.entries);
   const expanded = useApp((state) => state.expanded);
   const selection = useApp((state) => state.selection);
+  const starred = useApp((state) => state.starred);
+  const version = useApp((state) => state.notesVersion);
   const tree = useMemo(() => buildTree(entries), [entries]);
+  void version;
+  const stars = new Set(starred);
   return (
     <div className="side-body">
       <div className="side-actions">
@@ -214,9 +223,19 @@ function FilePane() {
         <button disabled={!selection} onClick={() => askRename()} type="button">Rename</button>
         <button disabled={!selection} onClick={() => askDelete()} type="button">Delete</button>
       </div>
+      {starred.length > 0 ? (
+        <div className="starred">
+          {starred.map((path) => (
+            <button className="tree-row" key={path} onClick={() => void openNote(path)} title={path} type="button">
+              <span className="tree-mark">★</span>
+              <span className="tree-name">{getState().notes.get(path)?.title ?? fileTitle(path)}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
       <div className="tree">
         {tree.map((node) => (
-          <TreeRow depth={0} expanded={expanded} key={node.path} node={node} selection={selection} />
+          <TreeRow depth={0} expanded={expanded} key={node.path} node={node} selection={selection} starred={stars} />
         ))}
       </div>
     </div>
@@ -228,11 +247,13 @@ function TreeRow({
   depth,
   expanded,
   selection,
+  starred,
 }: {
   node: TreeNode;
   depth: number;
   expanded: Record<string, boolean>;
   selection: string | null;
+  starred: Set<string>;
 }) {
   const isOpen = expanded[node.path];
   if (node.isDir) {
@@ -248,7 +269,7 @@ function TreeRow({
           <span className="tree-name" title={node.name}>{node.name}</span>
         </button>
         {isOpen ? node.children.map((child) => (
-          <TreeRow depth={depth + 1} expanded={expanded} key={child.path} node={child} selection={selection} />
+          <TreeRow depth={depth + 1} expanded={expanded} key={child.path} node={child} selection={selection} starred={starred} />
         )) : null}
       </div>
     );
@@ -266,6 +287,7 @@ function TreeRow({
       title={node.name}
       type="button"
     >
+      {starred.has(node.path) ? <span className="tree-mark">★</span> : null}
       <span className={note ? "tree-name" : "tree-name muted"}>{node.name}</span>
     </button>
   );
@@ -553,6 +575,8 @@ const commands = [
   { title: "New note", hint: "⌘N", run: () => askNewNote() },
   { title: "New folder", run: () => askNewFolder() },
   { title: "Open daily note", hint: "⌘D", run: () => void openDaily() },
+  { title: "Toggle star", run: () => toggleStar() },
+  { title: "Find and replace", run: () => showReplace() },
   { title: "Insert template", run: () => void insertTemplate() },
   { title: "Set daily notes folder", run: () => showPrompt({ kind: "daily-folder", title: "Daily notes folder", initial: getState().dailyFolder }) },
   { title: "Set template note", run: () => showPrompt({ kind: "template-path", title: "Template note path", initial: getState().templatePath ?? "" }) },
@@ -575,7 +599,7 @@ function Palette() {
   }, [palette]);
   const items = useMemo(() => {
     if (palette === "files") {
-      return fuzzyRank(query, [...getState().notes.values()], (note) => `${note.title} ${note.path}`).slice(0, 40);
+      return fuzzyRank(query, [...getState().notes.values()], (note) => `${note.title} ${note.path} ${aliasesOf(note).join(" ")}`).slice(0, 40);
     }
     if (palette === "commands") return fuzzyRank(query, commands, (command) => command.title);
     return [];
@@ -644,6 +668,54 @@ function PromptDialog() {
         <div className="dialog-actions">
           <button onClick={() => cancelConfirm()} type="button">Cancel</button>
           <button className="primary" type="submit">Save</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function ReplaceDialog() {
+  const open = useApp((state) => state.replaceOpen);
+  const version = useApp((state) => state.notesVersion);
+  const [find, setFind] = useState("");
+  const [replacement, setReplacement] = useState("");
+  useEffect(() => {
+    if (open) {
+      setFind("");
+      setReplacement("");
+    }
+  }, [open]);
+  if (!open) return null;
+  let hits = 0;
+  let files = 0;
+  if (find) {
+    for (const note of getState().notes.values()) {
+      const content = getState().docs[note.path]?.content ?? note.content;
+      const count = replaceLiteral(content, find, replacement).count;
+      if (count > 0) {
+        files += 1;
+        hits += count;
+      }
+    }
+  }
+  void version;
+  return (
+    <div className="overlay" onMouseDown={() => cancelConfirm()}>
+      <form
+        className="dialog narrow"
+        onMouseDown={(event) => event.stopPropagation()}
+        onSubmit={(event) => {
+          event.preventDefault();
+          void replaceInVault(find, replacement);
+        }}
+      >
+        <h2>Find and replace</h2>
+        <input aria-label="Find" autoFocus onChange={(event) => setFind(event.target.value)} placeholder="Find" value={find} />
+        <input aria-label="Replace with" onChange={(event) => setReplacement(event.target.value)} placeholder="Replace with" value={replacement} />
+        <p className="muted">{find ? `${hits} in ${files} ${files === 1 ? "note" : "notes"}` : "Literal text, every note"}</p>
+        <div className="dialog-actions">
+          <button onClick={() => cancelConfirm()} type="button">Cancel</button>
+          <button className="primary" disabled={!find || hits === 0} type="submit">Replace</button>
         </div>
       </form>
     </div>

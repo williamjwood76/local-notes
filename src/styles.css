@@ -72,6 +72,8 @@ button:disabled { opacity: 0.4; }
 }
 .tree-row { min-width: 0; }
 .tree-row .twist { width: 12px; flex: none; color: var(--muted); }
+.tree-mark { width: 14px; flex: none; color: var(--accent); }
+.starred { border-bottom: 1px solid var(--line); padding-bottom: 6px; margin-bottom: 6px; }
 .tree-name {
   min-width: 0;
   overflow: hidden;

@@ -1,4 +1,14 @@
-import type { LinkRef, Note } from "./types";
+import type { LinkRef, Note, PropertyValue } from "./types";
+
+export function aliasesOf(note: Note): string[] {
+  return [...aliasValues(note.properties.aliases), ...aliasValues(note.properties.alias)];
+}
+
+function aliasValues(value: PropertyValue | undefined): string[] {
+  if (typeof value === "string" && value.trim()) return [value.trim()];
+  if (Array.isArray(value)) return value.filter((item) => item.trim());
+  return [];
+}
 
 export type ResolveResult =
   | { status: "ok"; path: string }
@@ -9,16 +19,22 @@ function stemOf(path: string): string {
   return path.replace(/\.markdown$/i, "").replace(/\.md$/i, "");
 }
 
+function addName(map: Map<string, string[]>, name: string, path: string) {
+  const key = name.toLowerCase();
+  const list = map.get(key) ?? [];
+  if (!list.includes(path)) list.push(path);
+  map.set(key, list);
+}
+
 export function makeResolver(notes: Iterable<Note>) {
   const byBase = new Map<string, string[]>();
   const byStem = new Map<string, string>();
+  const byAlias = new Map<string, string[]>();
   for (const note of notes) {
     const stem = stemOf(note.path);
     byStem.set(stem.toLowerCase(), note.path);
-    const base = stem.split("/").pop()!.toLowerCase();
-    const list = byBase.get(base) ?? [];
-    list.push(note.path);
-    byBase.set(base, list);
+    addName(byBase, stem.split("/").pop()!, note.path);
+    for (const alias of aliasesOf(note)) addName(byAlias, alias, note.path);
   }
 
   return function resolve(target: string): ResolveResult {
@@ -32,13 +48,20 @@ export function makeResolver(notes: Iterable<Note>) {
       );
       if (matches.length === 1) return { status: "ok", path: matches[0][1] };
       if (matches.length > 1) return { status: "ambiguous", paths: matches.map((item) => item[1]) };
+      const alias = byAlias.get(cleaned.toLowerCase()) ?? [];
+      if (alias.length === 1) return { status: "ok", path: alias[0] };
+      if (alias.length > 1) return { status: "ambiguous", paths: [...alias] };
       return { status: "missing" };
     }
-    const matches = byBase.get(cleaned.toLowerCase()) ?? [];
+    const matches = unique([...(byBase.get(cleaned.toLowerCase()) ?? []), ...(byAlias.get(cleaned.toLowerCase()) ?? [])]);
     if (matches.length === 1) return { status: "ok", path: matches[0] };
-    if (matches.length > 1) return { status: "ambiguous", paths: [...matches] };
+    if (matches.length > 1) return { status: "ambiguous", paths: matches };
     return { status: "missing" };
   };
+}
+
+function unique(paths: string[]): string[] {
+  return [...new Set(paths)];
 }
 
 const IMAGE = /\.(png|jpe?g|gif|webp|svg)$/i;

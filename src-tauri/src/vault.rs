@@ -194,7 +194,10 @@ pub fn read_bytes(root: &Path, rel: &str) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-pub fn write_text(root: &Path, rel: &str, content: &str) -> Result<(), String> {
+pub fn write_bytes(root: &Path, rel: &str, bytes: &[u8]) -> Result<(), String> {
+    if bytes.len() > 20_000_000 {
+        return Err("file is too large".into());
+    }
     let path = resolve_in(root, rel)?;
     if path.exists() && !path.is_file() {
         return Err("not a file".into());
@@ -207,12 +210,16 @@ pub fn write_text(root: &Path, rel: &str, content: &str) -> Result<(), String> {
         .ok_or_else(|| "missing file name".to_string())?
         .to_string_lossy();
     let tmp = parent.join(format!(".{file_name}.{}.tmp", std::process::id()));
-    fs::write(&tmp, content).map_err(|err| format!("write: {err}"))?;
+    fs::write(&tmp, bytes).map_err(|err| format!("write: {err}"))?;
     fs::rename(&tmp, &path).map_err(|err| {
         let _ = fs::remove_file(&tmp);
         format!("rename: {err}")
     })?;
     Ok(())
+}
+
+pub fn write_text(root: &Path, rel: &str, content: &str) -> Result<(), String> {
+    write_bytes(root, rel, content.as_bytes())
 }
 
 pub fn create_dir(root: &Path, rel: &str) -> Result<(), String> {
@@ -286,6 +293,7 @@ mod tests {
         assert!(lexical_inside(&root, "a/../../secret").is_err());
         assert!(lexical_inside(&root, "/etc/passwd").is_err());
         assert!(write_text(&root, "../escape.md", "nope").is_err());
+        assert!(write_bytes(&root, "../escape.png", b"nope").is_err());
         assert!(read_text(&root, "../escape.md").is_err());
         let _ = fs::remove_dir_all(&root);
     }

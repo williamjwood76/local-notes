@@ -164,7 +164,7 @@ class NoteEmbedWidget extends WidgetType {
     box.append(heading, body);
     box.addEventListener("mousedown", (event) => {
       event.preventDefault();
-      if (!this.missing) bridge.openLink(this.spec);
+      bridge.openLink(this.spec);
     });
     return box;
   }

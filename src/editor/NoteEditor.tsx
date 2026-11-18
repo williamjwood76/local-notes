@@ -5,7 +5,7 @@ import { EditorView, keymap } from "@codemirror/view";
 import { applyFormat, type FormatKind } from "./format";
 import { notesLanguage } from "./language";
 import { linkClickHandler, livePreview, notesTheme, refreshEffect } from "./preview";
-import { clearInsert, clearScroll, ensureDoc, getState, onEdit, saveDoc, useApp } from "../store";
+import { clearInsert, clearScroll, ensureDoc, getState, onEdit, pasteImage, saveDoc, useApp } from "../store";
 
 const previewCompartment = new Compartment();
 
@@ -55,6 +55,17 @@ export function NoteEditor({ path, children }: { path: string; children?: ReactN
           notesLanguage,
           notesTheme,
           EditorView.lineWrapping,
+          EditorView.domEventHandlers({
+            paste(event) {
+              const file = pastedImage(event.clipboardData);
+              if (!file) return false;
+              event.preventDefault();
+              void file.arrayBuffer().then((buffer) => {
+                void pasteImage(path, new Uint8Array(buffer), file.type || "image/png");
+              });
+              return true;
+            },
+          }),
           linkClickHandler,
           previewCompartment.of(getState().preview ? livePreview : []),
           EditorView.updateListener.of((update) => {
@@ -170,4 +181,18 @@ function FormatBar({ onFormat }: { onFormat: (kind: FormatKind) => void }) {
       ))}
     </div>
   );
+}
+
+function pastedImage(data: DataTransfer | null): File | null {
+  if (!data) return null;
+  for (const item of data.items) {
+    if (item.kind === "file" && item.type.startsWith("image/")) {
+      const file = item.getAsFile();
+      if (file) return file;
+    }
+  }
+  for (const file of data.files) {
+    if (file.type.startsWith("image/")) return file;
+  }
+  return null;
 }

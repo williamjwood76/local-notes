@@ -32,6 +32,15 @@ export function writeText(path: string, content: string): Promise<void> {
   return invoke("write_text", { path, content });
 }
 
+export function writeBytes(path: string, bytes: Uint8Array): Promise<void> {
+  let binary = "";
+  const size = 0x8000;
+  for (let index = 0; index < bytes.length; index += size) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + size));
+  }
+  return invoke("write_bytes", { path, content: btoa(binary) });
+}
+
 export function createDir(path: string): Promise<void> {
   return invoke("create_dir", { path });
 }

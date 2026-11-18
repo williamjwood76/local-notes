@@ -94,6 +94,7 @@ export type VaultPrefs = {
   graphOrphans: boolean;
   graphTag: string;
   expanded: Record<string, boolean>;
+  starred: string[];
 };
 
 export type PersistedSettings = {

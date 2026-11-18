@@ -121,6 +121,16 @@ describe("link resolution", () => {
     expect(resolve("work/Atlas")).toEqual({ status: "ok", path: "work/Atlas.md" });
     expect(resolve("missing")).toEqual({ status: "missing" });
   });
+
+  it("resolves a frontmatter alias and reports a collision", () => {
+    const aliased = [
+      note("Atlas.md", "---\naliases:\n  - Map\n---\n# Atlas"),
+      note("Other.md", "---\nalias: Atlas\n---\n# Other"),
+    ];
+    const resolveAlias = makeResolver(aliased);
+    expect(resolveAlias("Map")).toEqual({ status: "ok", path: "Atlas.md" });
+    expect(resolveAlias("Atlas").status).toBe("ambiguous");
+  });
 });
 
 describe("search", () => {

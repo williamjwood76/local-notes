@@ -159,6 +159,14 @@ fn write_text(state: State<AppState>, path: String, content: String) -> Result<(
 }
 
 #[tauri::command]
+fn write_bytes(state: State<AppState>, path: String, content: String) -> Result<(), String> {
+    let bytes = STANDARD
+        .decode(content.trim())
+        .map_err(|err| format!("decode: {err}"))?;
+    vault::write_bytes(&current_root(&state)?, &path, &bytes)
+}
+
+#[tauri::command]
 fn create_dir(state: State<AppState>, path: String) -> Result<(), String> {
     vault::create_dir(&current_root(&state)?, &path)
 }
@@ -212,6 +220,7 @@ pub fn run() {
             read_text,
             read_bytes,
             write_text,
+            write_bytes,
             create_dir,
             delete_path,
             rename_path,

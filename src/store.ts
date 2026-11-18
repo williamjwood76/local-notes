@@ -20,9 +20,10 @@ import {
   updateTabs,
 } from "./layout";
 import { annotationPath } from "./pdfmarks";
-import { fileTitle, parseNote, sectionRange } from "./parser";
-import { makeResolver } from "./resolve";
+import { fileTitle, parseNote, sectionRange, stripMarkdownExt } from "./parser";
+import { isImagePath, makeResolver } from "./resolve";
 import { dailyFileName, expandTemplate, joinPath } from "./template";
+import { linkTextFor, replaceLiteral, rewriteMovedLinks } from "./vaultedit";
 import type {
   FsEntry,
   GraphMode,
@@ -68,6 +69,8 @@ export type AppState = {
   graphMode: GraphMode;
   graphOrphans: boolean;
   graphTag: string;
+  starred: string[];
+  replaceOpen: boolean;
   palette: "commands" | "files" | null;
   prompt: PromptState | null;
   confirmPath: string | null;
@@ -102,6 +105,8 @@ let state: AppState = {
   graphMode: "global",
   graphOrphans: true,
   graphTag: "",
+  starred: [],
+  replaceOpen: false,
   palette: null,
   prompt: null,
   confirmPath: null,
@@ -183,6 +188,7 @@ function prefsFromState(): VaultPrefs {
     graphOrphans: state.graphOrphans,
     graphTag: state.graphTag,
     expanded: state.expanded,
+    starred: state.starred,
   };
 }
 
@@ -230,6 +236,7 @@ function normalizeSettings(value: PersistedSettings | Record<string, never>): Pe
       graphOrphans: prefs.graphOrphans !== false,
       graphTag: typeof prefs.graphTag === "string" ? prefs.graphTag : "",
       expanded: prefs.expanded && typeof prefs.expanded === "object" ? prefs.expanded : {},
+      starred: Array.isArray(prefs.starred) ? prefs.starred.filter((item) => typeof item === "string") : [],
     };
   }
   return { lastVault, vaults };
@@ -291,6 +298,7 @@ export async function openVault(path: string) {
       graphMode: saved?.graphMode ?? "global",
       graphOrphans: saved?.graphOrphans ?? true,
       graphTag: saved?.graphTag ?? "",
+      starred: saved?.starred ?? [],
       expanded,
       selection: null,
       status: `${notes.size} notes`,
@@ -406,10 +414,39 @@ export async function openNote(path: string, loc?: { heading: string | null; blo
   );
 }
 
+async function createMissingNote(target: string): Promise<string | null> {
+  if (isImagePath(target)) {
+    setStatus(`No file named ${target}`);
+    return null;
+  }
+  const path = safeRel(`${stripMarkdownExt(target.trim().replace(/\\/g, "/").replace(/^\/+/, ""))}.md`);
+  if (!path) {
+    setStatus("That note path is not allowed");
+    return null;
+  }
+  try {
+    await ensureParent(path);
+    let text: string;
+    try {
+      text = await api.readText(path);
+    } catch {
+      text = `# ${fileTitle(path)}\n\n`;
+      await api.writeText(path, text);
+    }
+    await refreshEntries();
+    setState({ notes: replaceNote(path, text), notesVersion: state.notesVersion + 1 });
+    return path;
+  } catch (error) {
+    setStatus(message(error));
+    return null;
+  }
+}
+
 export async function openLink(spec: OpenSpec) {
   const resolved = bridge.resolve(spec.target);
   if (resolved.status === "missing") {
-    setStatus(`No note named ${spec.target}`);
+    const created = await createMissingNote(spec.target);
+    if (created) await openNote(created, spec);
     return;
   }
   if (resolved.status === "ambiguous") {
@@ -596,7 +633,75 @@ export function askDelete() {
 }
 
 export function cancelConfirm() {
-  setState({ confirmPath: null, ambiguous: null, prompt: null });
+  setState({ confirmPath: null, ambiguous: null, prompt: null, replaceOpen: false });
+}
+
+export function showReplace() {
+  setState({ replaceOpen: true, palette: null });
+}
+
+export function toggleStar(path = activePath()) {
+  if (!path || !state.notes.has(path)) return;
+  const starred = state.starred.includes(path)
+    ? state.starred.filter((item) => item !== path)
+    : [...state.starred, path];
+  setState({ starred }, true);
+}
+
+export async function pasteImage(notePath: string, bytes: Uint8Array, mime: string) {
+  const ext = mime === "image/jpeg" ? "jpg" : mime === "image/gif" ? "gif" : mime === "image/webp" ? "webp" : "png";
+  const now = new Date();
+  const pad = (value: number) => String(value).padStart(2, "0");
+  const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  const taken = new Set(state.entries.map((entry) => entry.path));
+  let path = `attachments/Pasted image ${stamp}.${ext}`;
+  let suffix = 2;
+  while (taken.has(path)) {
+    path = `attachments/Pasted image ${stamp}-${suffix}.${ext}`;
+    suffix += 1;
+  }
+  try {
+    await ensureParent(path);
+    await api.writeBytes(path, bytes);
+    await refreshEntries();
+    setState({ insert: { path: notePath, text: `![[${path}]]`, nonce: Date.now() }, status: "Pasted image" });
+  } catch (error) {
+    setStatus(message(error));
+  }
+}
+
+export async function replaceInVault(find: string, replacement: string) {
+  if (!find) return;
+  const notes = new Map(state.notes);
+  const docs = { ...state.docs };
+  let files = 0;
+  let hits = 0;
+  for (const note of state.notes.values()) {
+    const current = docs[note.path]?.content ?? note.content;
+    const next = replaceLiteral(current, find, replacement);
+    if (next.count === 0) continue;
+    files += 1;
+    hits += next.count;
+    notes.set(note.path, parseNote(note.path, next.content, Date.now()));
+    if (docs[note.path]) {
+      docs[note.path] = { ...docs[note.path], content: next.content, dirty: next.content !== docs[note.path].saved };
+    } else {
+      await api.writeText(note.path, next.content);
+    }
+  }
+  setState({
+    notes,
+    docs,
+    notesVersion: state.notesVersion + 1,
+    replaceOpen: false,
+    status: files === 0 ? "No matches" : `Replaced ${hits} in ${files} ${files === 1 ? "note" : "notes"}`,
+  });
+  for (const [path, doc] of Object.entries(state.docs)) {
+    if (!doc.dirty) continue;
+    const existing = saveTimers.get(path);
+    if (existing) window.clearTimeout(existing);
+    saveTimers.set(path, window.setTimeout(() => void saveDoc(path), 600));
+  }
 }
 
 export function clearScroll(nonce: number) {
@@ -710,14 +815,49 @@ function rewrite(path: string, from: string, to: string, isDir: boolean): string
 
 async function renameVaultPath(from: string, to: string) {
   const isDir = state.entries.some((entry) => entry.isDir && entry.path === from);
+  const resolve = makeResolver(state.notes.values());
+  const moved = new Map<string, string>();
+  for (const path of state.notes.keys()) {
+    const next = rewrite(path, from, to, isDir);
+    if (next !== path) moved.set(path, next);
+  }
+  const future = [...state.notes.keys()].map((path) => moved.get(path) ?? path);
+  const nextTarget = (target: string) => {
+    const hit = resolve(target);
+    if (hit.status !== "ok") return null;
+    const dest = moved.get(hit.path);
+    if (!dest) return null;
+    const label = linkTextFor(dest, future);
+    return stripMarkdownExt(target).toLowerCase() === label.toLowerCase() ? null : label;
+  };
+  const rewritten = new Map<string, string>();
+  for (const note of state.notes.values()) {
+    const content = state.docs[note.path]?.content ?? note.content;
+    const updated = rewriteMovedLinks(content, nextTarget);
+    if (updated !== content) rewritten.set(note.path, updated);
+  }
   await api.renamePath(from, to);
+  for (const [path, content] of rewritten) {
+    await api.writeText(moved.get(path) ?? path, content);
+  }
+  for (const path of [...saveTimers.keys()]) {
+    const timer = saveTimers.get(path);
+    if (timer) window.clearTimeout(timer);
+    saveTimers.delete(path);
+  }
   const notes = new Map<string, Note>();
   for (const note of state.notes.values()) {
-    const path = rewrite(note.path, from, to, isDir);
-    notes.set(path, { ...note, path });
+    const path = moved.get(note.path) ?? note.path;
+    const content = rewritten.get(note.path);
+    notes.set(path, content === undefined ? { ...note, path } : parseNote(path, content, Date.now()));
   }
   const docs: Record<string, Doc> = {};
-  for (const [path, doc] of Object.entries(state.docs)) docs[rewrite(path, from, to, isDir)] = doc;
+  for (const [path, doc] of Object.entries(state.docs)) {
+    const next = moved.get(path) ?? path;
+    const content = rewritten.get(path);
+    docs[next] = content === undefined ? doc : { content, saved: content, dirty: false };
+  }
+  const starred = state.starred.map((path) => rewrite(path, from, to, isDir));
   setState(
     {
       notes,
@@ -725,9 +865,14 @@ async function renameVaultPath(from: string, to: string) {
       notesVersion: state.notesVersion + 1,
       layout: renameLayoutPaths(state.layout, from, to, isDir),
       selection: rewrite(state.selection ?? from, from, to, isDir),
+      starred,
     },
     true,
   );
+  for (const [path, doc] of Object.entries(docs)) {
+    if (!doc.dirty) continue;
+    saveTimers.set(path, window.setTimeout(() => void saveDoc(path), 600));
+  }
   await refreshEntries();
 }
 
@@ -754,7 +899,8 @@ export async function confirmDelete() {
       if (notePath === path || (isDir && notePath.startsWith(`${path}/`))) continue;
       docs[notePath] = doc;
     }
-    setState({ notes, docs, layout, selection: null, notesVersion: state.notesVersion + 1, status: "Deleted" }, true);
+    const starred = state.starred.filter((item) => item !== path && !(isDir && item.startsWith(`${path}/`)));
+    setState({ notes, docs, layout, selection: null, starred, notesVersion: state.notesVersion + 1, status: "Deleted" }, true);
     if (!isDir && path.toLowerCase().endsWith(".pdf")) {
       await api.deletePath(annotationPath(path)).catch(() => undefined);
     }
