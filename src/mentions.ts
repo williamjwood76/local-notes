@@ -43,6 +43,14 @@ export function wikiChoices(
 
 export type TaskItem = { offset: number; line: number; checked: boolean; text: string };
 
+export function keepTask(path: string, text: string, noteTags: string[], todayOnly: boolean, todayPath: string, tag: string): boolean {
+  if (todayOnly && path !== todayPath) return false;
+  const clean = tag.trim().replace(/^#/, "").toLowerCase();
+  if (!clean) return true;
+  if (noteTags.some((item) => item.toLowerCase() === clean)) return true;
+  return new RegExp(`(^|\\s)#${clean.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}_/-])`, "iu").test(text);
+}
+
 export function taskItems(content: string): TaskItem[] {
   const items: TaskItem[] = [];
   let inFence = false;

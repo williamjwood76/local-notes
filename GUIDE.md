@@ -4,16 +4,17 @@ Notes are plain markdown files in a folder you choose. The app does not upload t
 
 ## Open a folder
 
-Choose **Open…** and pick the folder of notes. The app remembers that folder and the tabs you had open. One folder is open at a time.
+Choose **Open…** and pick the folder of notes. The app remembers that folder and the tabs you had open. One folder is open at a time. When the app opens that folder again, it also opens today’s daily note.
 
 ## Files
 
 The left column is the folder. Drag its right edge to make filenames readable.
 
 - **New note** and **New folder** create files next to the selected item.
-- **Rename** changes the name. Links that pointed at that note are updated. A unique name stays short. A name used by two notes keeps the folder in the link.
-- **Delete** asks first, then removes the file.
-- **Star** (command **Toggle star**) pins a note at the top of the file list.
+- **Rename** changes the name. Links that pointed at that note are updated. A unique name stays short. A name used by two notes keeps the folder in the link. Renaming a heading updates `[[Note#Heading]]` links that pointed at the old heading.
+- Drag a file onto a folder to move it there. Drop it on the empty part of the file list to move it to the top of the folder.
+- **Trash** asks first, then moves the file into a hidden trash folder. **Restore** at the bottom of the file list puts it back. It is not removed from the disk until you delete that hidden folder yourself.
+- **Star** (command **Toggle star**) pins a note at the top of the file list. **Recent** lists the notes you opened last.
 
 Click a markdown file to edit it. Click a PDF to open it.
 
@@ -35,7 +36,8 @@ The bar above the note inserts markdown. It does not change the file into a diff
 - `$x^2$` is inline math. `$$` on its own lines is a larger equation.
 - A code block that starts with ` ```mermaid ` draws a diagram.
 - A callout starts with `> [!note]` followed by the text on the next lines.
-- `- [ ]` is an open task. Click the box in the note, or use **Show open tasks**.
+- `- [ ]` is an open task. Click the box in the note, or use **Show open tasks**. In that list, **Today** keeps tasks from today’s daily note, and the tag box keeps tasks on notes with that tag, or tasks whose line contains it.
+- Spellcheck follows the Mac dictionary. **Toggle spellcheck** turns it off.
 
 ## Find
 
@@ -61,7 +63,7 @@ To give a note another name, add a property called `aliases` with a list, or `al
 
 ## Daily notes and templates
 
-**Open daily note** (⌘D), or the **Today** button, creates today’s note, named with the date, or opens it if it is already there. **Set daily notes folder** chooses where it goes.
+**Open daily note** (⌘D), or the **Today** button, creates today’s note, named with the date, or opens it if it is already there. **Yesterday** does the same for the day before. The strip under the top bar is the three days on either side of today. **Set daily notes folder** chooses where these notes go.
 
 **Insert today’s date**, or the **Date** button, adds today’s date (`YYYY-MM-DD`) at the bottom of the note you already have open. It does not create a new note.
 

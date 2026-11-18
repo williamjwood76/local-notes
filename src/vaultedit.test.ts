@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { linkTextFor, replaceLiteral, rewriteMovedLinks } from "./vaultedit";
+import { headingRenames, linkTextFor, replaceLiteral, rewriteHeadingLinks, rewriteMovedLinks, trashDestination } from "./vaultedit";
 
 describe("moved links", () => {
   const next = (target: string) => (target.toLowerCase() === "old" ? "New Name" : null);
@@ -22,6 +22,26 @@ describe("link text", () => {
   it("uses the file name when it is unique and the path when it is not", () => {
     expect(linkTextFor("work/Plan.md", ["work/Plan.md", "Atlas.md"])).toBe("Plan");
     expect(linkTextFor("work/Atlas.md", ["Atlas.md", "work/Atlas.md"])).toBe("work/Atlas");
+  });
+});
+
+describe("renamed headings", () => {
+  it("treats one changed heading as a rename and ignores an inserted heading", () => {
+    expect(headingRenames("# Old\n\n## Keep\n", "# New\n\n## Keep\n")).toEqual([{ from: "Old", to: "New" }]);
+    expect(headingRenames("# A\n# B\n", "# A\n# Inserted\n# B\n")).toEqual([]);
+  });
+
+  it("updates heading links for that note and leaves other notes alone", () => {
+    const source = "[[Plan#Old|see]] [[Other#Old]] [[#Old]]\n`[[Plan#Old]]`\n";
+    expect(rewriteHeadingLinks(source, ["Plan"], [{ from: "Old", to: "New" }], true)).toBe(
+      "[[Plan#New|see]] [[Other#Old]] [[#New]]\n`[[Plan#Old]]`\n",
+    );
+  });
+});
+
+describe("trash", () => {
+  it("keeps the original path under a hidden trash folder", () => {
+    expect(trashDestination("notes/Today.md", 5)).toBe(".trash/5/notes/Today.md");
   });
 });
 

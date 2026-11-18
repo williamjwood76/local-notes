@@ -19,6 +19,20 @@ export function dailyFileName(date = new Date()): string {
   return `${formatDate(date)}.md`;
 }
 
+export function addDays(date: Date, days: number): Date {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+export function sameDay(left: Date, right: Date): boolean {
+  return left.getFullYear() === right.getFullYear() && left.getMonth() === right.getMonth() && left.getDate() === right.getDate();
+}
+
+export function dayLabel(date: Date): string {
+  return date.toLocaleDateString(undefined, { weekday: "short", day: "numeric" });
+}
+
 export function appendDateLine(content: string, date: Date): string {
   const stamp = formatDate(date);
   if (content.length === 0) return `${stamp}\n`;

@@ -22,9 +22,9 @@ import {
 import { annotationPath } from "./pdfmarks";
 import { fileTitle, parseNote, sectionRange, stripMarkdownExt } from "./parser";
 import { mentionHits, wrapMention } from "./mentions";
-import { isImagePath, makeResolver, resolveAttachment } from "./resolve";
-import { appendDateLine, dailyFileName, expandTemplate, joinPath } from "./template";
-import { linkTextFor, replaceLiteral, rewriteMovedLinks } from "./vaultedit";
+import { aliasesOf, isImagePath, makeResolver, resolveAttachment } from "./resolve";
+import { addDays, appendDateLine, dailyFileName, expandTemplate, joinPath } from "./template";
+import { headingRenames, linkTextFor, replaceLiteral, rewriteHeadingLinks, rewriteMovedLinks, trashDestination } from "./vaultedit";
 import type {
   FsEntry,
   GraphMode,
@@ -71,6 +71,9 @@ export type AppState = {
   graphOrphans: boolean;
   graphTag: string;
   starred: string[];
+  recent: string[];
+  trashed: { from: string; to: string; name: string }[];
+  spellcheck: boolean;
   replaceOpen: boolean;
   helpOpen: boolean;
   findOpen: boolean;
@@ -110,6 +113,9 @@ let state: AppState = {
   graphOrphans: true,
   graphTag: "",
   starred: [],
+  recent: [],
+  trashed: [],
+  spellcheck: true,
   replaceOpen: false,
   helpOpen: false,
   findOpen: false,
@@ -199,6 +205,9 @@ function prefsFromState(): VaultPrefs {
     graphTag: state.graphTag,
     expanded: state.expanded,
     starred: state.starred,
+    recent: state.recent,
+    trashed: state.trashed,
+    spellcheck: state.spellcheck,
   };
 }
 
@@ -247,6 +256,13 @@ function normalizeSettings(value: PersistedSettings | Record<string, never>): Pe
       graphTag: typeof prefs.graphTag === "string" ? prefs.graphTag : "",
       expanded: prefs.expanded && typeof prefs.expanded === "object" ? prefs.expanded : {},
       starred: Array.isArray(prefs.starred) ? prefs.starred.filter((item) => typeof item === "string") : [],
+      recent: Array.isArray(prefs.recent) ? prefs.recent.filter((item) => typeof item === "string").slice(0, 12) : [],
+      trashed: Array.isArray(prefs.trashed) ? prefs.trashed.flatMap((item) => {
+        if (!item || typeof item.from !== "string" || typeof item.to !== "string") return [];
+        const name = typeof item.name === "string" ? item.name : item.from.split("/").pop() ?? item.from;
+        return [{ from: item.from, to: item.to, name }];
+      }) : [],
+      spellcheck: prefs.spellcheck !== false,
     };
   }
   return { lastVault, vaults };
@@ -263,7 +279,7 @@ export async function boot() {
   emit();
   if (state.settings.lastVault) {
     try {
-      await openVault(state.settings.lastVault);
+      await openVault(state.settings.lastVault, { openToday: true });
     } catch (error) {
       setStatus(message(error));
     }
@@ -277,7 +293,7 @@ async function watchVault() {
   });
 }
 
-export async function openVault(path: string) {
+export async function openVault(path: string, options?: { openToday?: boolean }) {
   setStatus("Opening vault…");
   const entries = await api.openVault(path);
   const files = await api.readNotes();
@@ -309,6 +325,9 @@ export async function openVault(path: string) {
       graphOrphans: saved?.graphOrphans ?? true,
       graphTag: saved?.graphTag ?? "",
       starred: saved?.starred ?? [],
+      recent: saved?.recent ?? [],
+      trashed: saved?.trashed ?? [],
+      spellcheck: saved?.spellcheck !== false,
       expanded,
       selection: null,
       status: `${notes.size} notes`,
@@ -317,6 +336,13 @@ export async function openVault(path: string) {
     true,
   );
   await watchVault();
+  if (options?.openToday) {
+    try {
+      await openDaily();
+    } catch (error) {
+      setStatus(message(error));
+    }
+  }
 }
 
 export async function chooseVault() {
@@ -357,6 +383,7 @@ export async function saveDoc(path: string) {
   const doc = state.docs[path];
   if (!doc || !doc.dirty) return;
   const snapshot = doc.content;
+  const previous = doc.saved;
   try {
     await api.writeText(path, snapshot);
   } catch (error) {
@@ -369,6 +396,30 @@ export async function saveDoc(path: string) {
     docs: { ...state.docs, [path]: { ...current, saved: snapshot, dirty: false } },
     status: "Saved",
   });
+  const renames = headingRenames(previous, snapshot);
+  if (renames.length > 0) await applyHeadingRenames(path, renames);
+}
+
+async function applyHeadingRenames(path: string, renames: { from: string; to: string }[]) {
+  const note = state.notes.get(path);
+  const names = [fileTitle(path), stripMarkdownExt(path), note?.title ?? "", ...(note ? aliasesOf(note) : [])];
+  const notes = new Map(state.notes);
+  const docs = { ...state.docs };
+  let changed = 0;
+  for (const item of [...state.notes.values()]) {
+    const current = docs[item.path]?.content ?? item.content;
+    const updated = rewriteHeadingLinks(current, names, renames, item.path === path);
+    if (updated === current) continue;
+    await api.writeText(item.path, updated);
+    notes.set(item.path, parseNote(item.path, updated, Date.now()));
+    docs[item.path] = { content: updated, saved: updated, dirty: false };
+    const timer = saveTimers.get(item.path);
+    if (timer) window.clearTimeout(timer);
+    saveTimers.delete(item.path);
+    changed += 1;
+  }
+  if (changed === 0) return;
+  setState({ notes, docs, notesVersion: state.notesVersion + 1, status: "Updated heading links" });
 }
 
 export async function ensureDoc(path: string) {
@@ -412,12 +463,14 @@ export async function openNote(path: string, loc?: { heading: string | null; blo
       scroll = { path, offset: sectionRange(note, loc.heading, loc.blockId).start, nonce: Date.now() };
     }
   }
+  const recent = [path, ...state.recent.filter((item) => item !== path)].slice(0, 12);
   setState(
     {
       layout,
       activeLeaf,
       selection: path,
       expanded: expandTo(path, state.expanded),
+      recent,
       scroll,
     },
     true,
@@ -953,6 +1006,8 @@ async function renameVaultPath(from: string, to: string) {
     docs[next] = content === undefined ? doc : { content, saved: content, dirty: false };
   }
   const starred = state.starred.map((path) => rewrite(path, from, to, isDir));
+  const recent = state.recent.map((path) => rewrite(path, from, to, isDir));
+  const trashed = state.trashed.map((item) => ({ ...item, from: rewrite(item.from, from, to, isDir) }));
   setState(
     {
       notes,
@@ -961,6 +1016,8 @@ async function renameVaultPath(from: string, to: string) {
       layout: renameLayoutPaths(state.layout, from, to, isDir),
       selection: rewrite(state.selection ?? from, from, to, isDir),
       starred,
+      recent,
+      trashed,
     },
     true,
   );
@@ -971,38 +1028,122 @@ async function renameVaultPath(from: string, to: string) {
   await refreshEntries();
 }
 
+export async function moveEntry(from: string, folder: string) {
+  const entry = state.entries.find((item) => item.path === from);
+  if (!entry || entry.isDir) return;
+  const name = from.split("/").pop() ?? from;
+  const to = safeRel(joinPath(folder, name));
+  if (!to || to === from) return;
+  if (state.entries.some((item) => item.path === to)) {
+    setStatus("That folder already has a file with this name");
+    return;
+  }
+  try {
+    await renameVaultPath(from, to);
+    setStatus("Moved");
+  } catch (error) {
+    setStatus(message(error));
+  }
+}
+
+function covers(path: string, root: string, isDir: boolean): boolean {
+  return path === root || (isDir && path.startsWith(`${root}/`));
+}
+
 export async function confirmDelete() {
   const path = state.confirmPath;
-  if (!path) return;
+  if (!path || path === ".trash" || path.startsWith(".trash/")) return;
   setState({ confirmPath: null });
   try {
     const isDir = state.entries.some((entry) => entry.isDir && entry.path === path);
-    await api.deletePath(path);
+    const stamp = Date.now();
+    const to = trashDestination(path, stamp);
+    await ensureParent(to);
+    await api.renamePath(path, to);
+    if (!isDir && path.toLowerCase().endsWith(".pdf")) {
+      const marks = annotationPath(path);
+      try {
+        await api.readText(marks);
+        const marksTo = trashDestination(marks, stamp);
+        await ensureParent(marksTo);
+        await api.renamePath(marks, marksTo);
+      } catch {
+        // A PDF without highlights has nothing else to move.
+      }
+    }
     let layout = state.layout;
     for (const leaf of allLeaves(layout)) {
       for (const tab of [...leaf.tabs]) {
-        if (tab.kind !== "graph" && (tab.path === path || (isDir && tab.path.startsWith(`${path}/`)))) {
-          layout = closeTab(layout, leaf.id, tab.id);
-        }
+        if (tab.kind !== "graph" && covers(tab.path, path, isDir)) layout = closeTab(layout, leaf.id, tab.id);
       }
     }
-    const notes = new Map(
-      [...state.notes].filter(([notePath]) => notePath !== path && !(isDir && notePath.startsWith(`${path}/`))),
-    );
+    const notes = new Map([...state.notes].filter(([notePath]) => !covers(notePath, path, isDir)));
     const docs: Record<string, Doc> = {};
     for (const [notePath, doc] of Object.entries(state.docs)) {
-      if (notePath === path || (isDir && notePath.startsWith(`${path}/`))) continue;
-      docs[notePath] = doc;
+      if (!covers(notePath, path, isDir)) docs[notePath] = doc;
     }
-    const starred = state.starred.filter((item) => item !== path && !(isDir && item.startsWith(`${path}/`)));
-    setState({ notes, docs, layout, selection: null, starred, notesVersion: state.notesVersion + 1, status: "Deleted" }, true);
-    if (!isDir && path.toLowerCase().endsWith(".pdf")) {
-      await api.deletePath(annotationPath(path)).catch(() => undefined);
-    }
+    const drop = (item: string) => !covers(item, path, isDir);
+    const trashed = [{ from: path, to, name: path.split("/").pop() ?? path }, ...state.trashed].slice(0, 30);
+    setState({
+      notes,
+      docs,
+      layout,
+      selection: null,
+      starred: state.starred.filter(drop),
+      recent: state.recent.filter(drop),
+      trashed,
+      notesVersion: state.notesVersion + 1,
+      status: "Moved to trash",
+    }, true);
     await refreshEntries();
   } catch (error) {
     setStatus(message(error));
   }
+}
+
+export async function restoreTrash(to: string) {
+  const item = state.trashed.find((entry) => entry.to === to);
+  if (!item) return;
+  if (state.entries.some((entry) => entry.path === item.from || entry.path.startsWith(`${item.from}/`))) {
+    setStatus("The original path already exists");
+    return;
+  }
+  try {
+    await ensureParent(item.from);
+    await api.renamePath(item.to, item.from);
+    const prefix = item.to.endsWith(item.from) ? item.to.slice(0, item.to.length - item.from.length) : "";
+    if (prefix && item.from.toLowerCase().endsWith(".pdf")) {
+      const marks = annotationPath(item.from);
+      const marksTo = `${prefix}${marks}`;
+      try {
+        await api.readText(marksTo);
+        await ensureParent(marks);
+        await api.renamePath(marksTo, marks);
+      } catch {
+        // Highlights were not in the trash.
+      }
+    }
+    setState({ trashed: state.trashed.filter((entry) => entry.to !== to), status: "Restored" }, true);
+    await refreshEntries();
+    if (/\.(md|markdown)$/i.test(item.from)) {
+      const text = await api.readText(item.from);
+      setState({ notes: replaceNote(item.from, text), notesVersion: state.notesVersion + 1 });
+    } else {
+      const notes = new Map(state.notes);
+      for (const file of await api.readNotes()) {
+        if (file.path === item.from || file.path.startsWith(`${item.from}/`)) {
+          notes.set(file.path, parseNote(file.path, file.content, file.mtimeMs));
+        }
+      }
+      setState({ notes, notesVersion: state.notesVersion + 1 });
+    }
+  } catch (error) {
+    setStatus(message(error));
+  }
+}
+
+export function toggleSpellcheck() {
+  setState({ spellcheck: !state.spellcheck }, true);
 }
 
 export function setNoteProperty(path: string, key: string, value: PropertyValue | null) {
@@ -1023,8 +1164,12 @@ export function appendToday() {
   setState({ scroll: { path, offset: next.length, nonce: Date.now() } });
 }
 
-export async function openDaily() {
-  const name = dailyFileName();
+export function openYesterday() {
+  return openDaily(addDays(new Date(), -1));
+}
+
+export async function openDaily(date = new Date()) {
+  const name = dailyFileName(date);
   const path = joinPath(state.dailyFolder, name);
   if (!safeRel(path)) return;
   if (state.dailyFolder) await api.createDir(state.dailyFolder);
@@ -1038,7 +1183,7 @@ export async function openDaily() {
     let content = `# ${name.replace(/\.md$/, "")}\n\n`;
     if (state.templatePath) {
       try {
-        content = expandTemplate(await api.readText(state.templatePath), name.replace(/\.md$/, ""), new Date());
+        content = expandTemplate(await api.readText(state.templatePath), name.replace(/\.md$/, ""), date);
         if (!content.endsWith("\n")) content += "\n";
       } catch {
         setStatus("Template file was not found");
@@ -1085,6 +1230,7 @@ async function applyDiskChanges(paths: string[]) {
   const docs = { ...state.docs };
   let layout = state.layout;
   for (const path of paths) {
+    if (path === ".trash" || path.startsWith(".trash/")) continue;
     if (!/\.(md|markdown)$/i.test(path)) continue;
     try {
       const text = await api.readText(path);

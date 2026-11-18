@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parseNote } from "./parser";
 import { makeResolver } from "./resolve";
-import { mentionHits, taskItems, unlinkedMentions, wikiChoices, wikiQuery, wrapMention } from "./mentions";
+import { keepTask, mentionHits, taskItems, unlinkedMentions, wikiChoices, wikiQuery, wrapMention } from "./mentions";
 
 describe("wiki suggestions", () => {
   it("reads the text after an unclosed wikilink", () => {
@@ -30,6 +30,13 @@ describe("tasks", () => {
       [false, "Ship"],
       [true, "Done"],
     ]);
+  });
+
+  it("keeps today's note or a matching tag", () => {
+    expect(keepTask("2026-11-18.md", "Ship", [], true, "2026-11-18.md", "")).toBe(true);
+    expect(keepTask("other.md", "Ship", [], true, "2026-11-18.md", "")).toBe(false);
+    expect(keepTask("other.md", "Ship #focus", ["focus"], false, "2026-11-18.md", "focus")).toBe(true);
+    expect(keepTask("other.md", "Ship", ["home"], false, "2026-11-18.md", "focus")).toBe(false);
   });
 });
 

@@ -95,6 +95,9 @@ export type VaultPrefs = {
   graphTag: string;
   expanded: Record<string, boolean>;
   starred: string[];
+  recent: string[];
+  trashed: { from: string; to: string; name: string }[];
+  spellcheck: boolean;
 };
 
 export type PersistedSettings = {

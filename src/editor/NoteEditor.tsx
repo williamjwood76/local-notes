@@ -10,6 +10,11 @@ import { notesLanguage } from "./language";
 import { linkClickHandler, livePreview, notesTheme, refreshEffect } from "./preview";
 
 const previewCompartment = new Compartment();
+const spellCompartment = new Compartment();
+
+function spellExtension(on: boolean) {
+  return EditorView.contentAttributes.of({ spellcheck: on ? "true" : "false" });
+}
 
 function mapCaret(before: string, after: string, pos: number): number {
   let start = 0;
@@ -34,6 +39,7 @@ export function NoteEditor({ path, children }: { path: string; children?: ReactN
   const wikiRef = useRef<WikiMenu | null>(null);
   const content = useApp((state) => state.docs[path]?.content);
   const preview = useApp((state) => state.preview);
+  const spellcheck = useApp((state) => state.spellcheck);
   const scroll = useApp((state) => state.scroll);
   const insert = useApp((state) => state.insert);
   const notesVersion = useApp((state) => state.notesVersion);
@@ -130,6 +136,7 @@ export function NoteEditor({ path, children }: { path: string; children?: ReactN
           ]),
           notesLanguage,
           notesTheme,
+          spellCompartment.of(spellExtension(getState().spellcheck)),
           EditorView.lineWrapping,
           EditorView.domEventHandlers({
             paste(event) {
@@ -174,6 +181,10 @@ export function NoteEditor({ path, children }: { path: string; children?: ReactN
       effects: previewCompartment.reconfigure(preview ? livePreview : []),
     });
   }, [preview]);
+
+  useEffect(() => {
+    viewRef.current?.dispatch({ effects: spellCompartment.reconfigure(spellExtension(spellcheck)) });
+  }, [spellcheck]);
 
   useEffect(() => {
     viewRef.current?.dispatch({ effects: refreshEffect.of(null) });

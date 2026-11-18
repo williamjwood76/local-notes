@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type DragEvent } from "react";
 import { NoteEditor } from "../editor/NoteEditor";
 import { fuzzyRank } from "../fuzzy";
 import { fileTitle } from "../parser";
 import guide from "../../GUIDE.md?raw";
-import { taskItems, unlinkedMentions } from "../mentions";
+import { keepTask, taskItems, unlinkedMentions } from "../mentions";
+import { addDays, dailyFileName, dayLabel, joinPath, sameDay } from "../template";
 import { aliasesOf, backlinksFor, makeResolver, outgoingFor } from "../resolve";
 import { replaceLiteral } from "../vaultedit";
 import { searchNotes } from "../search";
@@ -28,14 +29,17 @@ import {
   insertTemplate,
   linkMention,
   requestFind,
+  moveEntry,
   openDaily,
   openGraph,
+  openYesterday,
   openLink,
   openNote,
   openPdf,
   resizeSplit,
   setLeftWidth,
   replaceInVault,
+  restoreTrash,
   saveActive,
   scrollTo,
   selectPath,
@@ -50,6 +54,7 @@ import {
   splitActive,
   submitPrompt,
   toggleExpanded,
+  toggleSpellcheck,
   toggleStar,
   toggleTask,
   toggleLeft,
@@ -120,6 +125,7 @@ export function App() {
   return (
     <div className="shell">
       <TopBar />
+      <DailyStrip />
       <div className="workspace">
         <LeftSidebar />
         <LeftResizeHandle />
@@ -168,10 +174,30 @@ function TopBar() {
           {preview ? "Live preview" : "Source"}
         </button>
         <button onClick={() => void openDaily()} type="button">Today</button>
+        <button onClick={() => void openYesterday()} type="button">Yesterday</button>
         <button onClick={() => appendToday()} title="Add today's date to the open note" type="button">Date</button>
         <button onClick={() => void chooseVault()} type="button">Open…</button>
       </div>
     </header>
+  );
+}
+
+function DailyStrip() {
+  const today = new Date();
+  const days = Array.from({ length: 7 }, (_, index) => addDays(today, index - 3));
+  return (
+    <div className="day-strip">
+      {days.map((date) => (
+        <button
+          className={sameDay(date, today) ? "on" : ""}
+          key={dailyFileName(date)}
+          onClick={() => void openDaily(date)}
+          type="button"
+        >
+          {dayLabel(date)}
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -225,17 +251,28 @@ function FilePane() {
   const expanded = useApp((state) => state.expanded);
   const selection = useApp((state) => state.selection);
   const starred = useApp((state) => state.starred);
+  const recent = useApp((state) => state.recent);
+  const trashed = useApp((state) => state.trashed);
   const version = useApp((state) => state.notesVersion);
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
   const tree = useMemo(() => buildTree(entries), [entries]);
   void version;
   const stars = new Set(starred);
+  const recentNotes = recent.filter((path) => getState().notes.has(path)).slice(0, 8);
+  const takeDrop = (folder: string, event: DragEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setDropTarget(null);
+    const from = event.dataTransfer.getData("text/plain");
+    if (from) void moveEntry(from, folder);
+  };
   return (
     <div className="side-body">
       <div className="side-actions">
         <button onClick={() => askNewNote()} type="button">New note</button>
         <button onClick={() => askNewFolder()} type="button">New folder</button>
         <button disabled={!selection} onClick={() => askRename()} type="button">Rename</button>
-        <button disabled={!selection} onClick={() => askDelete()} type="button">Delete</button>
+        <button disabled={!selection} onClick={() => askDelete()} type="button">Trash</button>
       </div>
       {starred.length > 0 ? (
         <div className="starred">
@@ -247,11 +284,53 @@ function FilePane() {
           ))}
         </div>
       ) : null}
-      <div className="tree">
+      {recentNotes.length > 0 ? (
+        <div className="starred">
+          <p className="muted">Recent</p>
+          {recentNotes.map((path) => (
+            <button className="tree-row" key={path} onClick={() => void openNote(path)} title={path} type="button">
+              <span className="tree-name">{getState().notes.get(path)?.title ?? fileTitle(path)}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+      <div
+        className={dropTarget === "" ? "tree drop" : "tree"}
+        onDragLeave={() => setDropTarget((current) => (current === "" ? null : current))}
+        onDragOver={(event) => {
+          if (event.target !== event.currentTarget) return;
+          event.preventDefault();
+          setDropTarget("");
+        }}
+        onDrop={(event) => takeDrop("", event)}
+      >
         {tree.map((node) => (
-          <TreeRow depth={0} expanded={expanded} key={node.path} node={node} selection={selection} starred={stars} />
+          <TreeRow
+            depth={0}
+            dropTarget={dropTarget}
+            expanded={expanded}
+            key={node.path}
+            node={node}
+            onDropFolder={(folder, event) => takeDrop(folder, event)}
+            onDropTarget={setDropTarget}
+            selection={selection}
+            starred={stars}
+          />
         ))}
       </div>
+      {trashed.length > 0 ? (
+        <div className="starred">
+          <p className="muted">Trash</p>
+          {trashed.map((item) => (
+            <div className="task-row" key={item.to}>
+              <button onClick={() => void restoreTrash(item.to)} title={item.from} type="button">
+                <strong>{item.name}</strong>
+                <small>Restore</small>
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -262,20 +341,34 @@ function TreeRow({
   expanded,
   selection,
   starred,
+  dropTarget,
+  onDropTarget,
+  onDropFolder,
 }: {
   node: TreeNode;
   depth: number;
   expanded: Record<string, boolean>;
   selection: string | null;
   starred: Set<string>;
+  dropTarget: string | null;
+  onDropTarget: (path: string | null) => void;
+  onDropFolder: (folder: string, event: DragEvent) => void;
 }) {
   const isOpen = expanded[node.path];
   if (node.isDir) {
+    const hot = dropTarget === node.path;
     return (
       <div>
         <button
-          className={selection === node.path ? "tree-row selected" : "tree-row"}
+          className={hot ? "tree-row drop" : selection === node.path ? "tree-row selected" : "tree-row"}
           onClick={() => toggleExpanded(node.path)}
+          onDragLeave={() => onDropTarget(dropTarget === node.path ? null : dropTarget)}
+          onDragOver={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onDropTarget(node.path);
+          }}
+          onDrop={(event) => onDropFolder(node.path, event)}
           style={{ paddingLeft: 8 + depth * 14 }}
           type="button"
         >
@@ -283,7 +376,17 @@ function TreeRow({
           <span className="tree-name" title={node.name}>{node.name}</span>
         </button>
         {isOpen ? node.children.map((child) => (
-          <TreeRow depth={depth + 1} expanded={expanded} key={child.path} node={child} selection={selection} starred={starred} />
+          <TreeRow
+            depth={depth + 1}
+            dropTarget={dropTarget}
+            expanded={expanded}
+            key={child.path}
+            node={child}
+            onDropFolder={onDropFolder}
+            onDropTarget={onDropTarget}
+            selection={selection}
+            starred={starred}
+          />
         )) : null}
       </div>
     );
@@ -292,10 +395,15 @@ function TreeRow({
   return (
     <button
       className={selection === node.path ? "tree-row selected" : "tree-row"}
+      draggable
       onClick={() => {
         selectPath(node.path);
         if (note) void openNote(node.path);
         else if (/\.pdf$/i.test(node.name)) void openPdf(node.path);
+      }}
+      onDragStart={(event) => {
+        event.dataTransfer.setData("text/plain", node.path);
+        event.dataTransfer.effectAllowed = "move";
       }}
       style={{ paddingLeft: 22 + depth * 14 }}
       title={node.name}
@@ -339,18 +447,27 @@ function SearchPane() {
 
 function TaskPane() {
   const version = useApp((state) => state.notesVersion);
+  const dailyFolder = useApp((state) => state.dailyFolder);
+  const [todayOnly, setTodayOnly] = useState(false);
+  const [tag, setTag] = useState("");
+  const todayPath = joinPath(dailyFolder, dailyFileName());
   const tasks = useMemo(() => {
     const rows: { path: string; title: string; offset: number; text: string }[] = [];
     for (const note of getState().notes.values()) {
       const content = getState().docs[note.path]?.content ?? note.content;
       for (const task of taskItems(content)) {
-        if (!task.checked) rows.push({ path: note.path, title: note.title, offset: task.offset, text: task.text });
+        if (task.checked || !keepTask(note.path, task.text, note.tags, todayOnly, todayPath, tag)) continue;
+        rows.push({ path: note.path, title: note.title, offset: task.offset, text: task.text });
       }
     }
     return rows;
-  }, [version]);
+  }, [version, todayOnly, todayPath, tag]);
   return (
     <div className="side-body result-list">
+      <div className="side-actions">
+        <button className={todayOnly ? "on" : ""} onClick={() => setTodayOnly((value) => !value)} type="button">Today</button>
+        <input aria-label="Filter tasks by tag" onChange={(event) => setTag(event.target.value)} placeholder="Tag" value={tag} />
+      </div>
       {tasks.length === 0 ? <p className="muted">No open tasks</p> : tasks.map((task) => (
         <div className="task-row" key={`${task.path}:${task.offset}`}>
           <input
@@ -636,8 +753,10 @@ const commands = [
   { title: "New note", hint: "⌘N", run: () => askNewNote() },
   { title: "New folder", run: () => askNewFolder() },
   { title: "Open daily note", hint: "⌘D", run: () => void openDaily() },
+  { title: "Open yesterday", run: () => void openYesterday() },
   { title: "Insert today's date", run: () => appendToday() },
   { title: "Toggle star", run: () => toggleStar() },
+  { title: "Toggle spellcheck", run: () => toggleSpellcheck() },
   { title: "Find in note", hint: "⌘F", run: () => requestFind() },
   { title: "Find and replace", run: () => showReplace() },
   { title: "Show open tasks", run: () => setLeftTab("tasks") },
@@ -822,11 +941,11 @@ function ConfirmDialog() {
   return (
     <div className="overlay" onMouseDown={() => cancelConfirm()}>
       <div className="dialog narrow" onMouseDown={(event) => event.stopPropagation()}>
-        <h2>Delete {path.split("/").pop()}?</h2>
-        <p>This removes the file from the vault folder.</p>
+        <h2>Move {path.split("/").pop()} to the trash?</h2>
+        <p>You can restore it from the bottom of the file list. It is not deleted yet.</p>
         <div className="dialog-actions">
           <button onClick={() => cancelConfirm()} type="button">Cancel</button>
-          <button className="danger" onClick={() => void confirmDelete()} type="button">Delete</button>
+          <button className="danger" onClick={() => void confirmDelete()} type="button">Move to trash</button>
         </div>
       </div>
     </div>
