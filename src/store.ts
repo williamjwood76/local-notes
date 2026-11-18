@@ -23,7 +23,7 @@ import { annotationPath } from "./pdfmarks";
 import { fileTitle, parseNote, sectionRange, stripMarkdownExt } from "./parser";
 import { mentionHits, wrapMention } from "./mentions";
 import { isImagePath, makeResolver, resolveAttachment } from "./resolve";
-import { dailyFileName, expandTemplate, joinPath } from "./template";
+import { appendDateLine, dailyFileName, expandTemplate, joinPath } from "./template";
 import { linkTextFor, replaceLiteral, rewriteMovedLinks } from "./vaultedit";
 import type {
   FsEntry,
@@ -1006,6 +1006,18 @@ export function setNoteProperty(path: string, key: string, value: PropertyValue 
   const doc = state.docs[path];
   if (!doc || !key.trim()) return;
   onEdit(path, writeProperty(doc.content, key.trim(), value));
+}
+
+export function appendToday() {
+  const path = activePath();
+  const content = path ? state.docs[path]?.content ?? state.notes.get(path)?.content : undefined;
+  if (!path || content == null) {
+    setStatus("Open a note first");
+    return;
+  }
+  const next = appendDateLine(content, new Date());
+  applyContent(path, next, "Added today's date");
+  setState({ scroll: { path, offset: next.length, nonce: Date.now() } });
 }
 
 export async function openDaily() {

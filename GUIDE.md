@@ -60,7 +60,9 @@ To give a note another name, add a property called `aliases` with a list, or `al
 
 ## Daily notes and templates
 
-**Open daily note** (⌘D) creates today’s note, named with the date, or opens it if it is already there. **Set daily notes folder** chooses where it goes.
+**Open daily note** (⌘D), or the **Today** button, creates today’s note, named with the date, or opens it if it is already there. **Set daily notes folder** chooses where it goes.
+
+**Insert today’s date**, or the **Date** button, adds today’s date (`YYYY-MM-DD`) at the bottom of the note you already have open. It does not create a new note.
 
 **Set template note** points at a markdown file. **Insert template** pastes it at the cursor. `{{date}}`, `{{time}}`, and `{{title}}` are filled in. A new daily note uses that template the first time it is created.
 

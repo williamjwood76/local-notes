@@ -5,7 +5,7 @@ import { parseNote, parseWikiTarget, sectionRange } from "./parser";
 import { makeResolver } from "./resolve";
 import { searchNotes } from "./search";
 import type { Note } from "./types";
-import { expandTemplate } from "./template";
+import { appendDateLine, expandTemplate } from "./template";
 
 const note = (path: string, content: string): Note => parseNote(path, content, 0);
 
@@ -148,6 +148,13 @@ describe("search", () => {
 });
 
 describe("templates and layout", () => {
+  it("appends today's date on its own line", () => {
+    const date = new Date(2026, 10, 18);
+    expect(appendDateLine("", date)).toBe("2026-11-18\n");
+    expect(appendDateLine("Notes", date)).toBe("Notes\n\n2026-11-18\n");
+    expect(appendDateLine("Notes\n", date)).toBe("Notes\n\n2026-11-18\n");
+  });
+
   it("expands template tokens", () => {
     const date = new Date(2026, 10, 11, 9, 5);
     expect(expandTemplate("# {{title}}\n{{date}} {{time}}", "Standup", date)).toBe(

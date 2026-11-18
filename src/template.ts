@@ -19,6 +19,13 @@ export function dailyFileName(date = new Date()): string {
   return `${formatDate(date)}.md`;
 }
 
+export function appendDateLine(content: string, date: Date): string {
+  const stamp = formatDate(date);
+  if (content.length === 0) return `${stamp}\n`;
+  const gap = content.endsWith("\n\n") ? "" : "\n";
+  return `${content}${content.endsWith("\n") ? "" : "\n"}${gap}${stamp}\n`;
+}
+
 export function joinPath(folder: string, name: string): string {
   const clean = folder.replace(/^\/+|\/+$/g, "");
   return clean ? `${clean}/${name}` : name;

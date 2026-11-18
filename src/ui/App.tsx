@@ -9,6 +9,7 @@ import { replaceLiteral } from "../vaultedit";
 import { searchNotes } from "../search";
 import {
   activateTab,
+  appendToday,
   activePath,
   askDelete,
   askNewFolder,
@@ -167,6 +168,7 @@ function TopBar() {
           {preview ? "Live preview" : "Source"}
         </button>
         <button onClick={() => void openDaily()} type="button">Today</button>
+        <button onClick={() => appendToday()} title="Add today's date to the open note" type="button">Date</button>
         <button onClick={() => void chooseVault()} type="button">Open…</button>
       </div>
     </header>
@@ -634,6 +636,7 @@ const commands = [
   { title: "New note", hint: "⌘N", run: () => askNewNote() },
   { title: "New folder", run: () => askNewFolder() },
   { title: "Open daily note", hint: "⌘D", run: () => void openDaily() },
+  { title: "Insert today's date", run: () => appendToday() },
   { title: "Toggle star", run: () => toggleStar() },
   { title: "Find in note", hint: "⌘F", run: () => requestFind() },
   { title: "Find and replace", run: () => showReplace() },
