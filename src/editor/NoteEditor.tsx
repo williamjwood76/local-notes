@@ -1,11 +1,13 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
+import { aliasesOf } from "../resolve";
+import { activePath, attachFiles, clearInsert, clearScroll, ensureDoc, getState, onEdit, pasteImage, saveDoc, useApp } from "../store";
+import { wikiChoices, wikiQuery, type WikiChoice } from "../mentions";
 import { applyFormat, type FormatKind } from "./format";
 import { notesLanguage } from "./language";
 import { linkClickHandler, livePreview, notesTheme, refreshEffect } from "./preview";
-import { clearInsert, clearScroll, ensureDoc, getState, onEdit, pasteImage, saveDoc, useApp } from "../store";
 
 const previewCompartment = new Compartment();
 
@@ -24,15 +26,84 @@ function mapCaret(before: string, after: string, pos: number): number {
   return Math.min(after.length, endAfter);
 }
 
+type WikiMenu = { from: number; query: string; choices: WikiChoice[]; index: number; top: number; left: number };
+
 export function NoteEditor({ path, children }: { path: string; children?: ReactNode }) {
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
+  const wikiRef = useRef<WikiMenu | null>(null);
   const content = useApp((state) => state.docs[path]?.content);
   const preview = useApp((state) => state.preview);
   const scroll = useApp((state) => state.scroll);
   const insert = useApp((state) => state.insert);
   const notesVersion = useApp((state) => state.notesVersion);
+  const findOpen = useApp((state) => state.findOpen && activePath(state) === path);
+  const findNonce = useApp((state) => state.findNonce);
+  const [wiki, setWiki] = useState<WikiMenu | null>(null);
+  const [findQuery, setFindQuery] = useState("");
+  const [findAt, setFindAt] = useState(0);
   const ready = content !== undefined;
+  wikiRef.current = wiki;
+  wikiActions.shift = (delta) => {
+    const current = wikiRef.current;
+    if (!current || current.choices.length === 0) return false;
+    const index = (current.index + delta + current.choices.length) % current.choices.length;
+    setWiki({ ...current, index });
+    return true;
+  };
+  wikiActions.accept = () => {
+    const current = wikiRef.current;
+    const view = viewRef.current;
+    if (!current || !view) return false;
+    const choice = current.choices[current.index];
+    if (!choice) return false;
+    insertChoice(view, current.from, choice.label);
+    return true;
+  };
+  wikiActions.dismiss = () => {
+    if (!wikiRef.current) return false;
+    setWiki(null);
+    return true;
+  };
+  wikiActions.sync = (view) => {
+    const pos = view.state.selection.main.head;
+    if (!view.state.selection.main.empty) {
+      setWiki((prev) => (prev ? null : prev));
+      return;
+    }
+    const line = view.state.doc.lineAt(pos);
+    const found = wikiQuery(line.text, pos - line.from);
+    if (!found) {
+      setWiki((prev) => (prev ? null : prev));
+      return;
+    }
+    const choices = wikiChoices(
+      [...getState().notes.values()].map((note) => ({ title: note.title, path: note.path, aliases: aliasesOf(note) })),
+      found.query,
+    );
+    if (choices.length === 0) {
+      setWiki((prev) => (prev ? null : prev));
+      return;
+    }
+    const coords = view.coordsAtPos(pos);
+    const from = line.from + found.from;
+    setWiki((prev) => {
+      const index = prev && prev.query === found.query ? Math.min(prev.index, choices.length - 1) : 0;
+      const top = (coords?.bottom ?? 0) + 4;
+      const left = Math.max(8, coords?.left ?? 8);
+      if (
+        prev &&
+        prev.from === from &&
+        prev.query === found.query &&
+        prev.index === index &&
+        prev.top === top &&
+        prev.left === left &&
+        prev.choices.length === choices.length &&
+        prev.choices.every((choice, index) => choice.label === choices[index].label && choice.detail === choices[index].detail)
+      ) return prev;
+      return { from, query: found.query, choices, index, top, left };
+    });
+  };
 
   useEffect(() => {
     void ensureDoc(path);
@@ -49,6 +120,11 @@ export function NoteEditor({ path, children }: { path: string; children?: ReactN
           history(),
           keymap.of([
             { key: "Mod-s", run: () => { void saveDoc(path); return true; } },
+            { key: "ArrowDown", run: () => shiftWiki(1) },
+            { key: "ArrowUp", run: () => shiftWiki(-1) },
+            { key: "Enter", run: () => acceptWiki() },
+            { key: "Tab", run: () => acceptWiki() },
+            { key: "Escape", run: () => dismissWiki() },
             ...historyKeymap,
             ...defaultKeymap,
           ]),
@@ -69,8 +145,8 @@ export function NoteEditor({ path, children }: { path: string; children?: ReactN
           linkClickHandler,
           previewCompartment.of(getState().preview ? livePreview : []),
           EditorView.updateListener.of((update) => {
-            if (!update.docChanged) return;
-            onEdit(path, update.state.doc.toString());
+            if (update.docChanged) onEdit(path, update.state.doc.toString());
+            if (update.docChanged || update.selectionSet) syncWiki(update.view);
           }),
         ],
       }),
@@ -124,6 +200,18 @@ export function NoteEditor({ path, children }: { path: string; children?: ReactN
     clearInsert(insert.nonce);
   }, [insert, path, ready]);
 
+  const findRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!findOpen) return;
+    const view = viewRef.current;
+    if (view && !view.state.selection.main.empty) {
+      const text = view.state.sliceDoc(view.state.selection.main.from, view.state.selection.main.to);
+      if (text && !text.includes("\n") && text.length <= 80) setFindQuery(text);
+    }
+    findRef.current?.focus();
+    findRef.current?.select();
+  }, [findOpen, findNonce]);
+
   const format = (kind: FormatKind) => {
     const view = viewRef.current;
     if (!view) return;
@@ -136,15 +224,148 @@ export function NoteEditor({ path, children }: { path: string; children?: ReactN
     view.focus();
   };
 
+  const spots = findSpots(viewRef.current?.state.doc.toString() ?? "", findQuery);
+  const showMatch = (index: number) => {
+    const view = viewRef.current;
+    if (!view || spots.length === 0) return;
+    const at = spots[(index + spots.length) % spots.length];
+    view.dispatch({
+      selection: { anchor: at, head: at + findQuery.length },
+      scrollIntoView: true,
+    });
+    setFindAt((index + spots.length) % spots.length);
+  };
+
+  useEffect(() => {
+    if (findOpen && findQuery) showMatch(0);
+  }, [findOpen, findQuery]);
+
   if (!ready) return <div className="editor-loading">Loading note…</div>;
   return (
     <>
       <FormatBar onFormat={format} />
+      {findOpen ? (
+        <form
+          className="find-bar"
+          onSubmit={(event) => {
+            event.preventDefault();
+            showMatch(findAt + 1);
+          }}
+        >
+          <input
+            aria-label="Find in note"
+            onChange={(event) => {
+              setFindQuery(event.target.value);
+              setFindAt(0);
+            }}
+            placeholder="Find in note"
+            ref={findRef}
+            value={findQuery}
+          />
+          <span className="muted">{findQuery ? `${spots.length === 0 ? 0 : findAt + 1} of ${spots.length}` : ""}</span>
+          <button onClick={() => showMatch(findAt - 1)} type="button">Previous</button>
+          <button type="submit">Next</button>
+        </form>
+      ) : null}
       {children}
-      <div className="editor-host" ref={host} />
+      <div
+        className="editor-host"
+        onDragOver={(event) => {
+          if (event.dataTransfer.types.includes("Files")) event.preventDefault();
+        }}
+        onDrop={(event) => {
+          if (event.dataTransfer.files.length === 0) return;
+          event.preventDefault();
+          void droppedFiles(path, event.dataTransfer.files);
+        }}
+        ref={host}
+      />
+      {wiki && wiki.choices.length > 0 ? (
+        <div className="wiki-menu" style={{ top: wiki.top, left: wiki.left }}>
+          {wiki.choices.map((choice, index) => (
+            <button
+              className={index === wiki.index ? "selected" : ""}
+              key={`${choice.detail}:${choice.label}`}
+              onMouseDown={(event) => {
+                event.preventDefault();
+                const view = viewRef.current;
+                if (!view) return;
+                insertChoice(view, wiki.from, choice.label);
+              }}
+              type="button"
+            >
+              <strong>{choice.label}</strong>
+              <small>{choice.detail}</small>
+            </button>
+          ))}
+        </div>
+      ) : null}
     </>
   );
 }
+
+function insertChoice(view: EditorView, from: number, label: string) {
+  const to = view.state.selection.main.head;
+  const after = view.state.sliceDoc(to, to + 2);
+  const text = after === "]]" ? label : `${label}]]`;
+  view.dispatch({
+    changes: { from, to, insert: text },
+    selection: { anchor: from + text.length + (after === "]]" ? 2 : 0) },
+  });
+  view.focus();
+}
+
+function findSpots(content: string, query: string): number[] {
+  if (!query) return [];
+  const doc = content.toLowerCase();
+  const needle = query.toLowerCase();
+  const spots: number[] = [];
+  let at = 0;
+  while (at <= doc.length - needle.length) {
+    const found = doc.indexOf(needle, at);
+    if (found === -1) break;
+    spots.push(found);
+    at = found + needle.length;
+  }
+  return spots;
+}
+
+async function droppedFiles(notePath: string, files: FileList) {
+  const attached: { name: string; bytes: Uint8Array }[] = [];
+  for (const file of files) {
+    attached.push({ name: file.name, bytes: new Uint8Array(await file.arrayBuffer()) });
+  }
+  await attachFiles(notePath, attached);
+}
+
+function shiftWiki(delta: number): boolean {
+  return wikiActions.shift(delta);
+}
+
+function acceptWiki(): boolean {
+  return wikiActions.accept();
+}
+
+function dismissWiki(): boolean {
+  return wikiActions.dismiss();
+}
+
+function syncWiki(view: EditorView): void {
+  wikiActions.sync(view);
+}
+
+const wikiActions = {
+  shift(_delta: number) {
+    return false;
+  },
+  accept() {
+    return false;
+  },
+  dismiss() {
+    return false;
+  },
+  sync(_view: EditorView) {},
+};
 
 const formats: { kind: FormatKind; label: string; title: string; className?: string }[] = [
   { kind: "bullet", label: "•", title: "Bulleted list" },

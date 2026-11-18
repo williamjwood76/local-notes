@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { NoteEditor } from "../editor/NoteEditor";
 import { fuzzyRank } from "../fuzzy";
 import { fileTitle } from "../parser";
+import guide from "../../GUIDE.md?raw";
+import { taskItems, unlinkedMentions } from "../mentions";
 import { aliasesOf, backlinksFor, makeResolver, outgoingFor } from "../resolve";
 import { replaceLiteral } from "../vaultedit";
 import { searchNotes } from "../search";
@@ -23,6 +25,8 @@ import {
   focusLeaf,
   getState,
   insertTemplate,
+  linkMention,
+  requestFind,
   openDaily,
   openGraph,
   openLink,
@@ -38,6 +42,7 @@ import {
   setLeftTab,
   setNoteProperty,
   setSearchQuery,
+  showHelp,
   showPalette,
   showPrompt,
   showReplace,
@@ -45,6 +50,7 @@ import {
   submitPrompt,
   toggleExpanded,
   toggleStar,
+  toggleTask,
   toggleLeft,
   toggleOrphans,
   togglePreview,
@@ -74,7 +80,10 @@ export function App() {
       }
       if (!(event.metaKey || event.ctrlKey)) return;
       const key = event.key.toLowerCase();
-      if (key === "p") {
+      if (key === "f") {
+        event.preventDefault();
+        requestFind();
+      } else if (key === "p") {
         event.preventDefault();
         showPalette(getState().palette === "commands" ? null : "commands");
       } else if (key === "o") {
@@ -120,6 +129,7 @@ export function App() {
       <Palette />
       <PromptDialog />
       <ReplaceDialog />
+      <HelpDialog />
       <ConfirmDialog />
       <AmbiguousDialog />
     </div>
@@ -174,10 +184,12 @@ function LeftSidebar() {
         <button className={tab === "files" ? "on" : ""} onClick={() => setLeftTab("files")} type="button">Files</button>
         <button className={tab === "search" ? "on" : ""} onClick={() => setLeftTab("search")} type="button">Search</button>
         <button className={tab === "tags" ? "on" : ""} onClick={() => setLeftTab("tags")} type="button">Tags</button>
+        <button className={tab === "tasks" ? "on" : ""} onClick={() => setLeftTab("tasks")} type="button">Tasks</button>
       </div>
       {tab === "files" ? <FilePane /> : null}
       {tab === "search" ? <SearchPane /> : null}
       {tab === "tags" ? <TagPane /> : null}
+      {tab === "tasks" ? <TaskPane /> : null}
     </aside>
   );
 }
@@ -323,6 +335,38 @@ function SearchPane() {
   );
 }
 
+function TaskPane() {
+  const version = useApp((state) => state.notesVersion);
+  const tasks = useMemo(() => {
+    const rows: { path: string; title: string; offset: number; text: string }[] = [];
+    for (const note of getState().notes.values()) {
+      const content = getState().docs[note.path]?.content ?? note.content;
+      for (const task of taskItems(content)) {
+        if (!task.checked) rows.push({ path: note.path, title: note.title, offset: task.offset, text: task.text });
+      }
+    }
+    return rows;
+  }, [version]);
+  return (
+    <div className="side-body result-list">
+      {tasks.length === 0 ? <p className="muted">No open tasks</p> : tasks.map((task) => (
+        <div className="task-row" key={`${task.path}:${task.offset}`}>
+          <input
+            aria-label={`Complete ${task.text}`}
+            checked={false}
+            onChange={() => toggleTask(task.path, task.offset)}
+            type="checkbox"
+          />
+          <button onClick={() => void openNote(task.path).then(() => scrollTo(task.path, task.offset))} type="button">
+            <strong>{task.text || "Task"}</strong>
+            <small>{task.title}</small>
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function TagPane() {
   const version = useApp((state) => state.notesVersion);
   const tags = useMemo(() => {
@@ -355,6 +399,9 @@ function RightSidebar() {
   void version;
   const backlinks = note ? backlinksFor(notes.values(), note.path, resolve) : [];
   const outgoing = note ? outgoingFor(note, resolve) : [];
+  const mentions = note
+    ? unlinkedMentions(notes.values(), note.path, (item) => getState().docs[item]?.content ?? notes.get(item)?.content ?? "", resolve)
+    : [];
   return (
     <aside className="sidebar right">
       <section>
@@ -378,6 +425,18 @@ function RightSidebar() {
             <strong>{link.title}</strong>
             <small>{link.line}</small>
           </button>
+        ))}
+      </section>
+      <section>
+        <h2>Unlinked</h2>
+        {mentions.length === 0 ? <p className="muted">None</p> : mentions.map((mention) => (
+          <div className="mention-row" key={`${mention.path}:${mention.offset}`}>
+            <button onClick={() => void openAt(mention.path, mention.offset)} type="button">
+              <strong>{mention.title}</strong>
+              <small>{mention.line}</small>
+            </button>
+            <button onClick={() => linkMention(mention.path, mention.offset, mention.length)} type="button">Link</button>
+          </div>
         ))}
       </section>
       <section>
@@ -576,7 +635,10 @@ const commands = [
   { title: "New folder", run: () => askNewFolder() },
   { title: "Open daily note", hint: "⌘D", run: () => void openDaily() },
   { title: "Toggle star", run: () => toggleStar() },
+  { title: "Find in note", hint: "⌘F", run: () => requestFind() },
   { title: "Find and replace", run: () => showReplace() },
+  { title: "Show open tasks", run: () => setLeftTab("tasks") },
+  { title: "Help", run: () => showHelp() },
   { title: "Insert template", run: () => void insertTemplate() },
   { title: "Set daily notes folder", run: () => showPrompt({ kind: "daily-folder", title: "Daily notes folder", initial: getState().dailyFolder }) },
   { title: "Set template note", run: () => showPrompt({ kind: "template-path", title: "Template note path", initial: getState().templatePath ?? "" }) },
@@ -718,6 +780,35 @@ function ReplaceDialog() {
           <button className="primary" disabled={!find || hits === 0} type="submit">Replace</button>
         </div>
       </form>
+    </div>
+  );
+}
+
+function HelpDialog() {
+  const open = useApp((state) => state.helpOpen);
+  if (!open) return null;
+  return (
+    <div className="overlay" onMouseDown={() => cancelConfirm()}>
+      <div className="dialog guide" onMouseDown={(event) => event.stopPropagation()}>
+        <Guide text={guide} />
+        <div className="dialog-actions">
+          <button className="primary" onClick={() => cancelConfirm()} type="button">Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Guide({ text }: { text: string }) {
+  return (
+    <div>
+      {text.split("\n").map((line, index) => {
+        if (line.startsWith("## ")) return <h3 key={index}>{line.slice(3)}</h3>;
+        if (line.startsWith("# ")) return <h2 key={index}>{line.slice(2)}</h2>;
+        if (line.startsWith("- ")) return <p className="guide-item" key={index}>{line.slice(2)}</p>;
+        if (!line.trim()) return null;
+        return <p key={index}>{line}</p>;
+      })}
     </div>
   );
 }

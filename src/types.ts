@@ -77,7 +77,7 @@ export type SplitNode = {
 
 export type LayoutNode = TabsNode | SplitNode;
 
-export type LeftTab = "files" | "search" | "tags";
+export type LeftTab = "files" | "search" | "tags" | "tasks";
 export type GraphMode = "global" | "local";
 
 export type VaultPrefs = {

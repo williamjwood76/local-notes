@@ -73,6 +73,16 @@ button:disabled { opacity: 0.4; }
 .tree-row { min-width: 0; }
 .tree-row .twist { width: 12px; flex: none; color: var(--muted); }
 .tree-mark { width: 14px; flex: none; color: var(--accent); }
+.find-bar { display: flex; gap: 6px; align-items: center; flex: none; padding: 6px 8px; border-bottom: 1px solid var(--line); background: var(--bg-raised); }
+.find-bar input { flex: 1; }
+.wiki-menu { position: fixed; z-index: 30; min-width: 220px; max-width: 360px; background: var(--bg-raised); border: 1px solid var(--line); border-radius: 8px; padding: 4px; display: flex; flex-direction: column; }
+.wiki-menu button { display: flex; flex-direction: column; align-items: flex-start; border-radius: 6px; padding: 4px 8px; }
+.task-row, .mention-row { display: flex; gap: 6px; align-items: flex-start; }
+.task-row button, .mention-row button:first-of-type { flex: 1; }
+.guide { width: min(680px, calc(100% - 32px)); max-height: min(78vh, 760px); overflow: auto; }
+.guide h2, .guide h3 { font-size: 15px; letter-spacing: 0; text-transform: none; color: var(--text); margin: 14px 0 6px; }
+.guide p { margin: 0 0 8px; line-height: 1.45; }
+.guide-item { padding-left: 12px; }
 .starred { border-bottom: 1px solid var(--line); padding-bottom: 6px; margin-bottom: 6px; }
 .tree-name {
   min-width: 0;

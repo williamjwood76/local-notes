@@ -2,6 +2,8 @@
 
 Personal markdown notes for a Mac. Notes stay as plain files in a folder you choose.
 
+How to use it is in [GUIDE.md](GUIDE.md). In the app, open the command palette with ⌘P and run **Help**.
+
 ## Run it on a work Mac
 
 Sign in to GitHub as **williamjwood76**. This repository is private.

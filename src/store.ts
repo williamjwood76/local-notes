@@ -21,7 +21,8 @@ import {
 } from "./layout";
 import { annotationPath } from "./pdfmarks";
 import { fileTitle, parseNote, sectionRange, stripMarkdownExt } from "./parser";
-import { isImagePath, makeResolver } from "./resolve";
+import { mentionHits, wrapMention } from "./mentions";
+import { isImagePath, makeResolver, resolveAttachment } from "./resolve";
 import { dailyFileName, expandTemplate, joinPath } from "./template";
 import { linkTextFor, replaceLiteral, rewriteMovedLinks } from "./vaultedit";
 import type {
@@ -71,6 +72,9 @@ export type AppState = {
   graphTag: string;
   starred: string[];
   replaceOpen: boolean;
+  helpOpen: boolean;
+  findOpen: boolean;
+  findNonce: number;
   palette: "commands" | "files" | null;
   prompt: PromptState | null;
   confirmPath: string | null;
@@ -107,6 +111,9 @@ let state: AppState = {
   graphTag: "",
   starred: [],
   replaceOpen: false,
+  helpOpen: false,
+  findOpen: false,
+  findNonce: 0,
   palette: null,
   prompt: null,
   confirmPath: null,
@@ -228,7 +235,7 @@ function normalizeSettings(value: PersistedSettings | Record<string, never>): Pe
       leftOpen: prefs.leftOpen !== false,
       leftWidth: clampLeftWidth(prefs.leftWidth),
       rightOpen: prefs.rightOpen !== false,
-      leftTab: prefs.leftTab === "search" || prefs.leftTab === "tags" ? prefs.leftTab : "files",
+      leftTab: prefs.leftTab === "search" || prefs.leftTab === "tags" || prefs.leftTab === "tasks" ? prefs.leftTab : "files",
       dailyFolder: typeof prefs.dailyFolder === "string" ? prefs.dailyFolder : "",
       templatePath: typeof prefs.templatePath === "string" ? prefs.templatePath : null,
       preview: prefs.preview !== false,
@@ -445,6 +452,19 @@ async function createMissingNote(target: string): Promise<string | null> {
 export async function openLink(spec: OpenSpec) {
   const resolved = bridge.resolve(spec.target);
   if (resolved.status === "missing") {
+    const file = resolveAttachment(bridge.files, spec.target);
+    if (file && /\.pdf$/i.test(file)) {
+      await openPdf(file);
+      return;
+    }
+    if (isImagePath(spec.target) || (file && isImagePath(file))) {
+      setStatus(file ?? `No file named ${spec.target}`);
+      return;
+    }
+    if (/\.[a-z0-9]+$/i.test(spec.target) && !/\.(md|markdown)$/i.test(spec.target)) {
+      setStatus(file ?? `No file named ${spec.target}`);
+      return;
+    }
     const created = await createMissingNote(spec.target);
     if (created) await openNote(created, spec);
     return;
@@ -633,7 +653,19 @@ export function askDelete() {
 }
 
 export function cancelConfirm() {
-  setState({ confirmPath: null, ambiguous: null, prompt: null, replaceOpen: false });
+  setState({ confirmPath: null, ambiguous: null, prompt: null, replaceOpen: false, helpOpen: false, findOpen: false });
+}
+
+export function showHelp() {
+  setState({ helpOpen: true, palette: null });
+}
+
+export function requestFind() {
+  if (!activePath()) {
+    setStatus("Open a note to search it");
+    return;
+  }
+  setState({ findOpen: true, findNonce: state.findNonce + 1, palette: null });
 }
 
 export function showReplace() {
@@ -648,18 +680,78 @@ export function toggleStar(path = activePath()) {
   setState({ starred }, true);
 }
 
+function sparePath(name: string): string {
+  const taken = new Set(state.entries.map((entry) => entry.path));
+  let path = `attachments/${name}`;
+  if (!taken.has(path)) return path;
+  const dot = name.lastIndexOf(".");
+  const stem = dot === -1 ? name : name.slice(0, dot);
+  const ext = dot === -1 ? "" : name.slice(dot);
+  let suffix = 2;
+  while (taken.has(path)) {
+    path = `attachments/${stem}-${suffix}${ext}`;
+    suffix += 1;
+  }
+  return path;
+}
+
+export async function attachFiles(notePath: string, files: { name: string; bytes: Uint8Array }[]) {
+  const links: string[] = [];
+  try {
+    for (const file of files) {
+      const name = file.name.split(/[/\\]/).pop()?.trim() ?? "";
+      if (!name || name === "." || name === ".." || name.startsWith(".")) continue;
+      const path = sparePath(name);
+      await ensureParent(path);
+      await api.writeBytes(path, file.bytes);
+      state = { ...state, entries: [...state.entries, { path, name, isDir: false, mtimeMs: Date.now() }] };
+      links.push(isImagePath(path) ? `![[${path}]]` : `[[${path}]]`);
+    }
+    if (links.length === 0) return;
+    await refreshEntries();
+    setState({ insert: { path: notePath, text: links.join("\n"), nonce: Date.now() }, status: "Attached" });
+  } catch (error) {
+    setStatus(message(error));
+  }
+}
+
+export function linkMention(path: string, offset: number, length: number) {
+  const content = state.docs[path]?.content ?? state.notes.get(path)?.content;
+  if (content == null) return;
+  const hits = mentionHits(content, content.slice(offset, offset + length));
+  if (!hits.some((hit) => hit.offset === offset && hit.length === length)) return;
+  applyContent(path, wrapMention(content, offset, length), "Linked");
+}
+
+export function toggleTask(path: string, offset: number) {
+  const content = state.docs[path]?.content ?? state.notes.get(path)?.content;
+  if (content == null) return;
+  const start = content.lastIndexOf("\n", Math.max(0, offset - 1)) + 1;
+  let end = content.indexOf("\n", offset);
+  if (end === -1) end = content.length;
+  const line = content.slice(start, end);
+  const nextLine = line.includes("[ ]") ? line.replace("[ ]", "[x]") : line.replace(/\[[xX]\]/, "[ ]");
+  if (nextLine === line) return;
+  applyContent(path, content.slice(0, start) + nextLine + content.slice(end), "Saved");
+}
+
+function applyContent(path: string, content: string, status: string) {
+  if (state.docs[path]) {
+    onEdit(path, content);
+    setStatus(status);
+    return;
+  }
+  void api.writeText(path, content).then(() => {
+    setState({ notes: replaceNote(path, content), notesVersion: state.notesVersion + 1, status });
+  }).catch((error: unknown) => setStatus(message(error)));
+}
+
 export async function pasteImage(notePath: string, bytes: Uint8Array, mime: string) {
   const ext = mime === "image/jpeg" ? "jpg" : mime === "image/gif" ? "gif" : mime === "image/webp" ? "webp" : "png";
   const now = new Date();
   const pad = (value: number) => String(value).padStart(2, "0");
   const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-  const taken = new Set(state.entries.map((entry) => entry.path));
-  let path = `attachments/Pasted image ${stamp}.${ext}`;
-  let suffix = 2;
-  while (taken.has(path)) {
-    path = `attachments/Pasted image ${stamp}-${suffix}.${ext}`;
-    suffix += 1;
-  }
+  const path = sparePath(`Pasted image ${stamp}.${ext}`);
   try {
     await ensureParent(path);
     await api.writeBytes(path, bytes);
