@@ -138,6 +138,9 @@ function syncBridge() {
   bridge.openLink = (spec) => {
     void openLink(spec);
   };
+  bridge.openUrl = (url) => {
+    void api.openExternal(url).catch((error: unknown) => setStatus(message(error)));
+  };
 }
 
 function emit() {

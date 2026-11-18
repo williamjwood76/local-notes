@@ -32,6 +32,10 @@ export function writeText(path: string, content: string): Promise<void> {
   return invoke("write_text", { path, content });
 }
 
+export function openExternal(url: string): Promise<void> {
+  return invoke("open_external", { url });
+}
+
 export function writeBytes(path: string, bytes: Uint8Array): Promise<void> {
   let binary = "";
   const size = 0x8000;

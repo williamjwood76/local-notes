@@ -12,4 +12,5 @@ export const bridge = {
   files: [] as string[],
   resolve: (_target: string): ResolveResult => ({ status: "missing" }),
   openLink: (_spec: OpenSpec) => {},
+  openUrl: (_url: string) => {},
 };

@@ -1,6 +1,6 @@
 import { syntaxTree } from "@codemirror/language";
 import katex from "katex";
-import { type EditorState, StateEffect, StateField, RangeSetBuilder } from "@codemirror/state";
+import { Prec, type EditorState, StateEffect, StateField, RangeSetBuilder } from "@codemirror/state";
 import {
   Decoration,
   type DecorationSet,
@@ -64,12 +64,51 @@ class StyledWidget extends WidgetType {
     element.className = this.className;
     element.textContent = this.text;
     element.addEventListener("mousedown", (event) => {
-      event.preventDefault();
+      if (event.button !== 0 || event.altKey) return;
       const coords = view.posAtCoords({ x: event.clientX, y: event.clientY });
+      const action = linkActionAt(view.state, coords ?? this.pos);
+      if (action) {
+        event.preventDefault();
+        event.stopPropagation();
+        followLink(action);
+        return;
+      }
+      event.preventDefault();
       view.dispatch({ selection: { anchor: coords ?? this.pos } });
       view.focus();
     });
     return element;
+  }
+
+  ignoreEvent(): boolean {
+    return true;
+  }
+}
+
+class UrlWidget extends WidgetType {
+  constructor(
+    readonly label: string,
+    readonly url: string,
+  ) {
+    super();
+  }
+
+  eq(other: UrlWidget): boolean {
+    return other.label === this.label && other.url === this.url;
+  }
+
+  toDOM(): HTMLElement {
+    const link = document.createElement("a");
+    link.className = "md-link";
+    link.href = this.url;
+    link.textContent = this.label;
+    link.addEventListener("mousedown", (event) => {
+      if (event.button !== 0 || event.altKey) return;
+      event.preventDefault();
+      event.stopPropagation();
+      bridge.openUrl(this.url);
+    });
+    return link;
   }
 
   ignoreEvent(): boolean {
@@ -95,6 +134,7 @@ class LinkWidget extends WidgetType {
     link.href = "#";
     link.textContent = this.label;
     link.addEventListener("mousedown", (event) => {
+      if (event.button !== 0 || event.altKey) return;
       event.preventDefault();
       event.stopPropagation();
       bridge.openLink(this.spec);
@@ -163,7 +203,9 @@ class NoteEmbedWidget extends WidgetType {
     body.textContent = this.text;
     box.append(heading, body);
     box.addEventListener("mousedown", (event) => {
+      if (event.button !== 0 || event.altKey) return;
       event.preventDefault();
+      event.stopPropagation();
       bridge.openLink(this.spec);
     });
     return box;
@@ -406,6 +448,53 @@ function linkLabel(rawInner: string): string {
   return parsed.alias || parsed.heading || parsed.blockId || parsed.target;
 }
 
+export type LinkAction = { kind: "note"; spec: OpenSpec } | { kind: "url"; url: string };
+
+export function linkActionAt(state: EditorState, pos: number): LinkAction | null {
+  let node: SyntaxNode | null = syntaxTree(state).resolveInner(pos, -1);
+  if (insideCode(node)) return null;
+  while (node) {
+    if (node.name === "WikiLink" || node.name === "Embed") {
+      const raw = state.doc.sliceString(node.from, node.to).replace(/^!?\[\[/, "").replace(/\]\]$/, "");
+      const spec = specFrom(raw);
+      return isImagePath(spec.target) ? null : { kind: "note", spec };
+    }
+    if (node.name === "Link" || node.name === "Autolink") {
+      const raw = state.doc.sliceString(node.from, node.to);
+      const match = /^\[[^\]]*\]\(([^)\s]+)\)/.exec(raw);
+      const target = match?.[1] ?? raw.replace(/^<|>$/g, "");
+      if (/^[a-z][a-z0-9+.-]*:/i.test(target)) return { kind: "url", url: target };
+      return { kind: "note", spec: specFrom(decodeURIComponentSafe(target)) };
+    }
+    node = node.parent;
+  }
+  const line = state.doc.lineAt(pos);
+  const url = /https?:\/\/[^\s<>)]+/g;
+  let found: RegExpExecArray | null;
+  while ((found = url.exec(line.text))) {
+    const from = line.from + found.index;
+    const to = from + found[0].length;
+    if (pos < from || pos > to) continue;
+    if (insideCode(syntaxTree(state).resolveInner(pos, -1))) return null;
+    return { kind: "url", url: found[0].replace(/[.,;:]+$/, "") };
+  }
+  return null;
+}
+
+function insideCode(node: SyntaxNode | null): boolean {
+  let current = node;
+  while (current) {
+    if (current.name === "InlineCode" || current.name === "FencedCode" || current.name === "CodeText") return true;
+    current = current.parent;
+  }
+  return false;
+}
+
+function followLink(action: LinkAction) {
+  if (action.kind === "url") bridge.openUrl(action.url);
+  else bridge.openLink(action.spec);
+}
+
 export function linkSpecAt(state: EditorState, pos: number): OpenSpec | null {
   let node: SyntaxNode | null = syntaxTree(state).resolveInner(pos, 1);
   while (node) {
@@ -510,8 +599,8 @@ export function buildDecorations(state: EditorState, refresh: () => void): Decor
         const match = /^\[([^\]]*)\]\(([^)\s]+)\)/.exec(raw);
         if (!match) return undefined;
         const url = match[2];
-        if (/^[a-z]+:/i.test(url)) {
-          add(node.from, node.to, Decoration.replace({ widget: new StyledWidget(match[1] || url, "md-link", node.from) }));
+        if (/^[a-z][a-z0-9+.-]*:/i.test(url)) {
+          add(node.from, node.to, Decoration.replace({ widget: new UrlWidget(match[1] || url, url) }));
         } else {
           add(node.from, node.to, Decoration.replace({ widget: new LinkWidget(match[1] || url, specFrom(decodeURIComponentSafe(url))) }));
         }
@@ -632,18 +721,20 @@ export const livePreview = [
   ),
 ];
 
-export const linkClickHandler = EditorView.domEventHandlers({
-  mousedown(event, view) {
-    if (!(event.metaKey || event.ctrlKey) || event.button !== 0) return false;
-    const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
-    if (pos == null) return false;
-    const spec = linkSpecAt(view.state, pos);
-    if (!spec) return false;
-    event.preventDefault();
-    bridge.openLink(spec);
-    return true;
-  },
-});
+export const linkClickHandler = Prec.highest(
+  EditorView.domEventHandlers({
+    mousedown(event, view) {
+      if (event.button !== 0 || event.altKey) return false;
+      const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+      if (pos == null) return false;
+      const action = linkActionAt(view.state, pos);
+      if (!action) return false;
+      event.preventDefault();
+      followLink(action);
+      return true;
+    },
+  }),
+);
 
 export const notesTheme = EditorView.theme(
   {

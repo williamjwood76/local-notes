@@ -182,6 +182,20 @@ fn rename_path(state: State<AppState>, from: String, to: String) -> Result<(), S
 }
 
 #[tauri::command]
+fn open_external(url: String) -> Result<(), String> {
+    let url = url.trim();
+    let allowed = url.starts_with("https://") || url.starts_with("http://") || url.starts_with("mailto:");
+    if !allowed || url.chars().any(|ch| ch.is_control()) {
+        return Err("That link cannot be opened".into());
+    }
+    std::process::Command::new("open")
+        .arg(url)
+        .spawn()
+        .map_err(|err| format!("open: {err}"))?;
+    Ok(())
+}
+
+#[tauri::command]
 fn load_settings(app: AppHandle) -> Result<serde_json::Value, String> {
     let path = settings_path(&app)?;
     if !path.exists() {
@@ -224,6 +238,7 @@ pub fn run() {
             create_dir,
             delete_path,
             rename_path,
+            open_external,
             load_settings,
             save_settings
         ])

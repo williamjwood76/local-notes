@@ -2,7 +2,7 @@ import { syntaxTree } from "@codemirror/language";
 import { EditorState } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
 import { notesLanguage } from "./language";
-import { buildDecorations } from "./preview";
+import { buildDecorations, linkActionAt } from "./preview";
 
 function namesOf(doc: string): string[] {
   const state = EditorState.create({ doc, extensions: [notesLanguage] });
@@ -22,5 +22,19 @@ describe("live preview", () => {
     expect(namesOf(doc)).toContain("WikiLink");
     expect(namesOf(doc)).toContain("HashTag");
     expect(buildDecorations(state, () => {}).size).toBeGreaterThan(0);
+  });
+
+  it("treats a click on a link as navigation and ignores the surrounding text", () => {
+    const doc = "See [[Atlas]] and [site](https://example.com) plus plain words.\n";
+    const state = EditorState.create({ doc, extensions: [notesLanguage] });
+    const wiki = doc.indexOf("Atlas");
+    const url = doc.indexOf("https");
+    const plain = doc.indexOf("plain");
+    expect(linkActionAt(state, wiki)).toEqual({
+      kind: "note",
+      spec: { target: "Atlas", heading: null, blockId: null },
+    });
+    expect(linkActionAt(state, url)).toEqual({ kind: "url", url: "https://example.com" });
+    expect(linkActionAt(state, plain)).toBeNull();
   });
 });
