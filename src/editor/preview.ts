@@ -173,30 +173,35 @@ class ImageWidget extends WidgetType {
   constructor(
     readonly src: string | null,
     readonly alt: string,
+    readonly pos: number,
+    readonly action: LinkAction | null,
   ) {
     super();
   }
 
   eq(other: ImageWidget): boolean {
-    return other.src === this.src && other.alt === this.alt;
+    return other.src === this.src && other.alt === this.alt && other.pos === this.pos && sameAction(other.action, this.action);
   }
 
-  toDOM(): HTMLElement {
-    if (!this.src) {
-      const missing = document.createElement("span");
-      missing.className = "embed-missing";
-      missing.textContent = this.alt;
-      return missing;
+  toDOM(view: EditorView): HTMLElement {
+    const element = this.src ? document.createElement("img") : document.createElement("span");
+    if (this.src && element instanceof HTMLImageElement) {
+      element.className = "embed-image";
+      element.alt = this.alt;
+      element.src = this.src;
+    } else {
+      element.className = "embed-missing";
+      element.textContent = this.alt;
     }
-    const image = document.createElement("img");
-    image.className = "embed-image";
-    image.alt = this.alt;
-    image.src = this.src;
-    return image;
+    if (this.action) {
+      const action = this.action;
+      bindLink(element, view, this.pos, () => followLink(action));
+    }
+    return element;
   }
 
   ignoreEvent(): boolean {
-    return false;
+    return this.action != null;
   }
 }
 
@@ -474,15 +479,19 @@ export function linkActionAt(state: EditorState, pos: number): LinkAction | null
   while (node) {
     if (node.name === "WikiLink" || node.name === "Embed") {
       const raw = state.doc.sliceString(node.from, node.to).replace(/^!?\[\[/, "").replace(/\]\]$/, "");
-      const spec = specFrom(raw);
-      return isImagePath(spec.target) ? null : { kind: "note", spec };
+      return { kind: "note", spec: specFrom(raw) };
+    }
+    if (node.name === "Image") {
+      const raw = state.doc.sliceString(node.from, node.to);
+      const match = /^!\[[^\]]*\]\(([^)\s]+)\)/.exec(raw);
+      if (!match) return null;
+      return actionForTarget(decodeURIComponentSafe(match[1]));
     }
     if (node.name === "Link" || node.name === "Autolink") {
       const raw = state.doc.sliceString(node.from, node.to);
       const match = /^\[[^\]]*\]\(([^)\s]+)\)/.exec(raw);
       const target = match?.[1] ?? raw.replace(/^<|>$/g, "");
-      if (/^[a-z][a-z0-9+.-]*:/i.test(target)) return { kind: "url", url: target };
-      return { kind: "note", spec: specFrom(decodeURIComponentSafe(target)) };
+      return actionForTarget(decodeURIComponentSafe(target));
     }
     node = node.parent;
   }
@@ -504,6 +513,21 @@ function insideCode(node: SyntaxNode | null): boolean {
   while (current) {
     if (current.name === "InlineCode" || current.name === "FencedCode" || current.name === "CodeText") return true;
     current = current.parent;
+  }
+  return false;
+}
+
+function actionForTarget(target: string): LinkAction {
+  if (/^[a-z][a-z0-9+.-]*:/i.test(target)) return { kind: "url", url: target };
+  return { kind: "note", spec: specFrom(target) };
+}
+
+function sameAction(left: LinkAction | null, right: LinkAction | null): boolean {
+  if (left === right) return true;
+  if (!left || !right || left.kind !== right.kind) return false;
+  if (left.kind === "url" && right.kind === "url") return left.url === right.url;
+  if (left.kind === "note" && right.kind === "note") {
+    return left.spec.target === right.spec.target && left.spec.heading === right.spec.heading && left.spec.blockId === right.spec.blockId;
   }
   return false;
 }
@@ -667,12 +691,14 @@ function embedDecoration(raw: string, refresh: () => void, pos: number): Decorat
     const match = /^!\[([^\]]*)\]\(([^)\s]+)\)/.exec(raw);
     const alt = match?.[1] || "image";
     const url = match?.[2] ?? "";
-    if (/^[a-z]+:/i.test(url)) return Decoration.replace({ widget: new ImageWidget(url, alt) });
-    return imageFor(url || alt, alt, refresh);
+    if (/^[a-z][a-z0-9+.-]*:/i.test(url)) {
+      return Decoration.replace({ widget: new ImageWidget(url, alt, pos, { kind: "url", url }) });
+    }
+    return imageFor(url || alt, alt, refresh, pos);
   }
   const inner = raw.replace(/^!\[\[/, "").replace(/\]\]$/, "");
   const spec = specFrom(inner);
-  if (isImagePath(spec.target)) return imageFor(spec.target, spec.target, refresh);
+  if (isImagePath(spec.target)) return imageFor(spec.target, spec.target, refresh, pos);
   const resolved = bridge.resolve(spec.target);
   if (resolved.status !== "ok") {
     return Decoration.replace({
@@ -687,12 +713,13 @@ function embedDecoration(raw: string, refresh: () => void, pos: number): Decorat
   return Decoration.replace({ widget: new NoteEmbedWidget(note.title, text, { ...spec, target: spec.target }, false, pos) });
 }
 
-function imageFor(target: string, alt: string, refresh: () => void): Decoration {
+function imageFor(target: string, alt: string, refresh: () => void, pos: number): Decoration {
   const file = resolveAttachment(bridge.files, target);
-  if (!file) return Decoration.replace({ widget: new ImageWidget(null, alt) });
+  const action: LinkAction = { kind: "note", spec: { target, heading: null, blockId: null } };
+  if (!file) return Decoration.replace({ widget: new ImageWidget(null, alt, pos, action) });
   const src = imageUrls.get(file) ?? null;
   if (!src) requestImage(file, refresh);
-  return Decoration.replace({ widget: new ImageWidget(src, alt) });
+  return Decoration.replace({ widget: new ImageWidget(src, alt, pos, action) });
 }
 
 function safeRefresh(view: EditorView) {

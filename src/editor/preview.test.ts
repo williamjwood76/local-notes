@@ -38,6 +38,24 @@ describe("live preview", () => {
     expect(linkActionAt(state, plain)).toBeNull();
   });
 
+  it("opens an image link instead of ignoring the click", () => {
+    const doc = "[[pic.png]] ![[shot.jpg]] ![alt](attachments/a.png) ![web](https://example.com/a.png)\n";
+    const state = EditorState.create({ doc, extensions: [notesLanguage] });
+    expect(linkActionAt(state, doc.indexOf("pic"))).toEqual({
+      kind: "note",
+      spec: { target: "pic.png", heading: null, blockId: null },
+    });
+    expect(linkActionAt(state, doc.indexOf("shot"))).toEqual({
+      kind: "note",
+      spec: { target: "shot.jpg", heading: null, blockId: null },
+    });
+    expect(linkActionAt(state, doc.indexOf("attachments"))).toEqual({
+      kind: "note",
+      spec: { target: "attachments/a.png", heading: null, blockId: null },
+    });
+    expect(linkActionAt(state, doc.indexOf("https"))).toEqual({ kind: "url", url: "https://example.com/a.png" });
+  });
+
   it("follows a link on a plain click and only edits on option-click", () => {
     expect(followOnClick(0, false)).toBe(true);
     expect(followOnClick(0, true)).toBe(false);

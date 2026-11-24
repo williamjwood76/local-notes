@@ -182,6 +182,23 @@ fn rename_path(state: State<AppState>, from: String, to: String) -> Result<(), S
 }
 
 #[tauri::command]
+fn open_vault_file(state: State<AppState>, path: String) -> Result<(), String> {
+    if path.chars().any(|ch| ch.is_control()) {
+        return Err("That file cannot be opened".into());
+    }
+    let root = current_root(&state)?;
+    let full = vault::resolve_in(&root, &path)?;
+    if !full.is_file() {
+        return Err("That file is not in the vault".into());
+    }
+    std::process::Command::new("open")
+        .arg(&full)
+        .spawn()
+        .map_err(|err| format!("open: {err}"))?;
+    Ok(())
+}
+
+#[tauri::command]
 fn open_external(url: String) -> Result<(), String> {
     let url = url.trim();
     let allowed = url.starts_with("https://") || url.starts_with("http://") || url.starts_with("mailto:");
@@ -239,6 +256,7 @@ pub fn run() {
             delete_path,
             rename_path,
             open_external,
+            open_vault_file,
             load_settings,
             save_settings
         ])

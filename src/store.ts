@@ -513,8 +513,12 @@ export async function openLink(spec: OpenSpec) {
       await openPdf(file);
       return;
     }
-    if (isImagePath(spec.target) || (file && isImagePath(file))) {
-      setStatus(file ?? `No file named ${spec.target}`);
+    if (file && isImagePath(file)) {
+      await api.openVaultFile(file).catch((error: unknown) => setStatus(message(error)));
+      return;
+    }
+    if (isImagePath(spec.target)) {
+      setStatus(`No file named ${spec.target}`);
       return;
     }
     if (/\.[a-z0-9]+$/i.test(spec.target) && !/\.(md|markdown)$/i.test(spec.target)) {
