@@ -11,6 +11,19 @@ function namesOf(doc: string): string[] {
   return names;
 }
 
+function spansOf(doc: string, anchor = doc.length): Array<[number, number]> {
+  const state = EditorState.create({ doc, selection: { anchor }, extensions: [notesLanguage] });
+  const spans: Array<[number, number]> = [];
+  buildDecorations(state, () => {}).between(0, doc.length, (from, to) => {
+    spans.push([from, to]);
+  });
+  return spans;
+}
+
+function covers(spans: Array<[number, number]>, index: number): boolean {
+  return spans.some(([from, to]) => index >= from && index < to) || spans.some(([from, to]) => from === to && from === index);
+}
+
 describe("live preview", () => {
   it("decorates markdown away from the cursor line", () => {
     const doc = "# Title\n\nA **bold** [[Atlas]] and #focus.\n\n- [ ] task\n\n```\ncode\n```\n\n> [!note] Hello\n> body\n";
@@ -22,6 +35,71 @@ describe("live preview", () => {
     expect(namesOf(doc)).toContain("WikiLink");
     expect(namesOf(doc)).toContain("HashTag");
     expect(buildDecorations(state, () => {}).size).toBeGreaterThan(0);
+  });
+
+  it("renders markdown after the cursor leaves the line", () => {
+    const doc = [
+      "- bullet",
+      "* star",
+      "+ plus",
+      "1. number",
+      "2) paren",
+      "  - nested",
+      "- [ ] open",
+      "- [x] done",
+      "# Title",
+      "A **bold** and *slant* and _under_ and ~~gone~~ and `code`",
+      "H~2~O and E=mc^2^",
+      "> quoted",
+      "[site](https://example.com)",
+      "<https://example.com/auto>",
+      "see www.example.com",
+      "[[Note]]",
+      "```",
+      "fence",
+      "```",
+      "",
+      "| a | b |",
+      "| --- | --- |",
+      "| 1 | 2 |",
+      "",
+      "---",
+      "",
+    ].join("\n");
+    const spans = spansOf(doc);
+    const at = (needle: string) => {
+      const index = doc.indexOf(needle);
+      expect(index).toBeGreaterThan(-1);
+      expect(covers(spans, index)).toBe(true);
+    };
+    at("- bullet");
+    at("* star");
+    at("+ plus");
+    at("1. number");
+    at("2) paren");
+    at("- nested");
+    at("[ ]");
+    at("[x]");
+    at("# Title");
+    at("**bold**");
+    at("*slant*");
+    at("_under_");
+    at("~~gone~~");
+    at("`code`");
+    at("~2~");
+    at("^2^");
+    at("> quoted");
+    at("[site]");
+    at("<https://example.com/auto>");
+    at("www.example.com");
+    at("[[Note]]");
+    at("```");
+    at("| a |");
+    at("---");
+    const quote = doc.indexOf("> quoted");
+    expect(spans.some(([from, to]) => from === quote && to === quote)).toBe(true);
+    const editing = spansOf(doc, 0);
+    expect(covers(editing, 0)).toBe(false);
   });
 
   it("treats a click on a link as navigation and ignores the surrounding text", () => {

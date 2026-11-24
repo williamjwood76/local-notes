@@ -175,6 +175,12 @@ button:disabled { opacity: 0.4; }
 .callout-label { display: inline-block; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; background: var(--accent-ink); color: var(--accent); border-radius: 999px; padding: 1px 6px; margin-right: 6px; }
 .task-box { margin-right: 6px; accent-color: var(--accent); }
 .md-rule { border: 0; border-top: 1px solid var(--line); margin: 12px 0; }
+.md-bullet, .md-ol { color: var(--accent); }
+.md-bullet { display: inline-block; width: 1em; text-align: center; }
+.md-ol { display: inline-block; min-width: 1.4em; margin-right: 0.2em; font-variant-numeric: tabular-nums; }
+.md-sup { vertical-align: super; font-size: 0.75em; }
+.md-sub { vertical-align: sub; font-size: 0.75em; }
+.cm-line.md-quote { box-shadow: inset 2px 0 0 var(--line); }
 .math-display { display: block; margin: 8px 0; overflow-x: auto; }
 .math-inline { display: inline-block; }
 .mermaid-block { margin: 8px 0; overflow-x: auto; }

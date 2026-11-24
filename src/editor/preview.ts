@@ -368,6 +368,27 @@ class TableWidget extends WidgetType {
   }
 }
 
+class ListMarkWidget extends WidgetType {
+  constructor(readonly label: string) {
+    super();
+  }
+
+  eq(other: ListMarkWidget): boolean {
+    return other.label === this.label;
+  }
+
+  toDOM(): HTMLElement {
+    const mark = document.createElement("span");
+    mark.className = this.label === "•" ? "md-bullet" : "md-ol";
+    mark.textContent = this.label;
+    return mark;
+  }
+
+  ignoreEvent(): boolean {
+    return false;
+  }
+}
+
 class CheckWidget extends WidgetType {
   constructor(
     readonly checked: boolean,
@@ -487,11 +508,16 @@ export function linkActionAt(state: EditorState, pos: number): LinkAction | null
       if (!match) return null;
       return actionForTarget(decodeURIComponentSafe(match[1]));
     }
-    if (node.name === "Link" || node.name === "Autolink") {
+    if (node.name === "Link") {
       const raw = state.doc.sliceString(node.from, node.to);
       const match = /^\[[^\]]*\]\(([^)\s]+)\)/.exec(raw);
-      const target = match?.[1] ?? raw.replace(/^<|>$/g, "");
-      return actionForTarget(decodeURIComponentSafe(target));
+      if (!match) return null;
+      return actionForTarget(decodeURIComponentSafe(match[1]));
+    }
+    if (node.name === "URL" || node.name === "Autolink") {
+      const target = state.doc.sliceString(node.from, node.to).replace(/^<|>$/g, "");
+      const url = webAddress(target);
+      return url ? { kind: "url", url } : null;
     }
     node = node.parent;
   }
@@ -515,6 +541,13 @@ function insideCode(node: SyntaxNode | null): boolean {
     current = current.parent;
   }
   return false;
+}
+
+function webAddress(target: string): string | null {
+  if (/^[a-z][a-z0-9+.-]*:/i.test(target)) return target;
+  if (target.startsWith("www.")) return `https://${target}`;
+  if (/^[^@\s]+@[^@\s]+$/.test(target)) return `mailto:${target}`;
+  return null;
 }
 
 function actionForTarget(target: string): LinkAction {
@@ -577,7 +610,8 @@ export function buildDecorations(state: EditorState, refresh: () => void): Decor
   });
   const math = findMath(state.doc.toString(), blocked);
   const hitsMath = (from: number, to: number) => math.some((span) => from < span.to && to > span.from);
-  const pieces: { from: number; to: number; deco: Decoration }[] = [];
+  const pieces: { from: number; to: number; deco: Decoration; line?: boolean }[] = [];
+  const quoteLines = new Set<number>();
   const add = (from: number, to: number, deco: Decoration, keep = false) => {
     if (to < from || onCursorLine(state, from, to)) return;
     if (!keep && hitsMath(from, to)) return;
@@ -622,8 +656,37 @@ export function buildDecorations(state: EditorState, refresh: () => void): Decor
         add(node.from, node.to, Decoration.replace({ widget: new StyledWidget(raw, "hash-tag", node.from) }));
         return false;
       }
+      if (node.name === "ListMark") {
+        const line = state.doc.lineAt(node.from);
+        const rel = node.to - line.from;
+        const gap = line.text[rel] === " " || line.text[rel] === "\t" ? 1 : 0;
+        const end = node.to + gap;
+        const task = /^\[[ xX]\]/.test(line.text.slice(rel + gap));
+        const label = /^\d/.test(raw) ? raw : "•";
+        add(node.from, end, task ? Decoration.replace({}) : Decoration.replace({ widget: new ListMarkWidget(label) }));
+        return false;
+      }
       if (node.name === "TaskMarker") {
         add(node.from, node.to, Decoration.replace({ widget: new CheckWidget(/\[[xX]\]/.test(raw), node.from) }));
+        return false;
+      }
+      if (node.name === "Blockquote") {
+        let pos = node.from;
+        while (pos < node.to) {
+          const line = state.doc.lineAt(pos);
+          if (!onCursorLine(state, line.from, line.to)) quoteLines.add(line.from);
+          pos = line.to + 1;
+        }
+      }
+      if (node.name === "URL" || node.name === "Autolink") {
+        const inner = raw.replace(/^<|>$/g, "");
+        const url = webAddress(inner);
+        if (url) add(node.from, node.to, Decoration.replace({ widget: new UrlWidget(inner, url, node.from) }));
+        return false;
+      }
+      if (node.name === "Superscript" || node.name === "Subscript") {
+        const text = raw.slice(1, -1);
+        if (text) add(node.from, node.to, Decoration.replace({ widget: new StyledWidget(text, node.name === "Superscript" ? "md-sup" : "md-sub", node.from) }));
         return false;
       }
       if (node.name === "Emphasis" || node.name === "StrongEmphasis" || node.name === "Strikethrough" || node.name === "InlineCode") {
@@ -675,7 +738,11 @@ export function buildDecorations(state: EditorState, refresh: () => void): Decor
     add(start, end, Decoration.replace({ widget: new CalloutWidget(match[1]) }));
   }
 
-  pieces.sort((a, b) => a.from - b.from || b.to - a.to);
+  for (const from of quoteLines) {
+    pieces.push({ from, to: from, deco: Decoration.line({ class: "md-quote" }), line: true });
+  }
+
+  pieces.sort((a, b) => a.from - b.from || Number(Boolean(b.line)) - Number(Boolean(a.line)) || b.to - a.to);
   const builder = new RangeSetBuilder<Decoration>();
   let cursor = 0;
   for (const piece of pieces) {
