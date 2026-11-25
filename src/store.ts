@@ -65,6 +65,7 @@ export type AppState = {
   selection: string | null;
   expanded: Record<string, boolean>;
   dailyFolder: string;
+  openDailyOnLaunch: boolean;
   templatePath: string | null;
   preview: boolean;
   graphMode: GraphMode;
@@ -107,6 +108,7 @@ let state: AppState = {
   selection: null,
   expanded: {},
   dailyFolder: "",
+  openDailyOnLaunch: false,
   templatePath: null,
   preview: true,
   graphMode: "global",
@@ -198,6 +200,7 @@ function prefsFromState(): VaultPrefs {
     rightOpen: state.rightOpen,
     leftTab: state.leftTab,
     dailyFolder: state.dailyFolder,
+    openDailyOnLaunch: state.openDailyOnLaunch,
     templatePath: state.templatePath,
     preview: state.preview,
     graphMode: state.graphMode,
@@ -249,6 +252,7 @@ function normalizeSettings(value: PersistedSettings | Record<string, never>): Pe
       rightOpen: prefs.rightOpen !== false,
       leftTab: prefs.leftTab === "search" || prefs.leftTab === "tags" || prefs.leftTab === "tasks" ? prefs.leftTab : "files",
       dailyFolder: typeof prefs.dailyFolder === "string" ? prefs.dailyFolder : "",
+      openDailyOnLaunch: prefs.openDailyOnLaunch === true,
       templatePath: typeof prefs.templatePath === "string" ? prefs.templatePath : null,
       preview: prefs.preview !== false,
       graphMode: prefs.graphMode === "local" ? "local" : "global",
@@ -279,7 +283,8 @@ export async function boot() {
   emit();
   if (state.settings.lastVault) {
     try {
-      await openVault(state.settings.lastVault, { openToday: true });
+      const openToday = state.settings.vaults[state.settings.lastVault]?.openDailyOnLaunch === true;
+      await openVault(state.settings.lastVault, { openToday });
     } catch (error) {
       setStatus(message(error));
     }
@@ -319,6 +324,7 @@ export async function openVault(path: string, options?: { openToday?: boolean })
       rightOpen: saved?.rightOpen ?? true,
       leftTab: saved?.leftTab ?? "files",
       dailyFolder: saved?.dailyFolder ?? "",
+      openDailyOnLaunch: saved?.openDailyOnLaunch === true,
       templatePath: saved?.templatePath ?? null,
       preview: saved?.preview ?? true,
       graphMode: saved?.graphMode ?? "global",
@@ -1148,6 +1154,11 @@ export async function restoreTrash(to: string) {
 
 export function toggleSpellcheck() {
   setState({ spellcheck: !state.spellcheck }, true);
+}
+
+export function toggleOpenDailyOnLaunch() {
+  const openDailyOnLaunch = !state.openDailyOnLaunch;
+  setState({ openDailyOnLaunch, status: openDailyOnLaunch ? "Daily note opens on launch" : "Daily note stays closed on launch" }, true);
 }
 
 export function setNoteProperty(path: string, key: string, value: PropertyValue | null) {

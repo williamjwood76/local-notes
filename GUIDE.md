@@ -4,7 +4,7 @@ Notes are plain markdown files in a folder you choose. The app does not upload t
 
 ## Open a folder
 
-Choose **Open…** and pick the folder of notes. The app remembers that folder and the tabs you had open. One folder is open at a time. When the app opens that folder again, it also opens today’s daily note.
+Choose **Open…** and pick the folder of notes. The app remembers that folder and the tabs you had open. One folder is open at a time. **Toggle open daily note on launch** makes the app open today’s daily note when that folder loads. It is off until you turn it on.
 
 ## Files
 

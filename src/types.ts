@@ -88,6 +88,7 @@ export type VaultPrefs = {
   rightOpen: boolean;
   leftTab: LeftTab;
   dailyFolder: string;
+  openDailyOnLaunch: boolean;
   templatePath: string | null;
   preview: boolean;
   graphMode: GraphMode;
