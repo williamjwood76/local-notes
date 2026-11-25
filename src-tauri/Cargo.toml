@@ -1,6 +1,6 @@
 [package]
 name = "local-notes"
-version = "0.2.0"
+version = "0.2.1"
 description = "Personal markdown notes"
 authors = ["you"]
 edition = "2024"
